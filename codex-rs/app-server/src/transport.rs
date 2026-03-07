@@ -614,6 +614,9 @@ async fn send_message_to_connection(
     }
 }
 
+/// Returns `Some(message)` when the outbound message should be delivered to
+/// this connection after stripping any unsupported experimental fields, or
+/// `None` when the entire message should be hidden from this connection.
 fn filter_outgoing_message_for_connection(
     connection_state: &OutboundConnectionState,
     message: OutgoingMessage,
