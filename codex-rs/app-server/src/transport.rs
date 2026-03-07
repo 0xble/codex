@@ -1137,7 +1137,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(writer_rx.try_recv().ok(), None);
+        assert!(writer_rx.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -1161,7 +1161,7 @@ mod tests {
             &mut connections,
             OutgoingEnvelope::ToConnection {
                 connection_id,
-                message: OutgoingMessage::Response(OutgoingResponse {
+                message: OutgoingMessage::Response(crate::outgoing_message::OutgoingResponse {
                     id: codex_app_server_protocol::RequestId::Integer(1),
                     result: json!({
                         "turn": {
