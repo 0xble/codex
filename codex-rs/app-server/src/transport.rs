@@ -1099,6 +1099,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn guardian_assessment_notification_is_hidden_without_experimental_api() {
+        let connection_id = ConnectionId(10);
+        let (writer_tx, mut writer_rx) = mpsc::channel(1);
+
+        let mut connections = HashMap::new();
+        connections.insert(
+            connection_id,
+            OutboundConnectionState::new(
+                writer_tx,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(RwLock::new(HashSet::new())),
+                None,
+            ),
+        );
+
+        route_outgoing_envelope(
+            &mut connections,
+            OutgoingEnvelope::ToConnection {
+                connection_id,
+                message: OutgoingMessage::AppServerNotification(ServerNotification::ItemStarted(
+                    codex_app_server_protocol::ItemStartedNotification {
+                        item: codex_app_server_protocol::ThreadItem::GuardianAssessment {
+                            id: "guardian_123".to_string(),
+                            status: codex_app_server_protocol::GuardianAssessmentStatus::InProgress,
+                            risk_score: None,
+                            risk_level: None,
+                            rationale: None,
+                            action: None,
+                        },
+                        thread_id: "thread_123".to_string(),
+                        turn_id: "turn_123".to_string(),
+                    },
+                )),
+            },
+        )
+        .await;
+
+        assert_eq!(writer_rx.try_recv().ok(), None);
+    }
+
+    #[tokio::test]
+    async fn guardian_assessment_items_are_stripped_from_responses_without_experimental_api() {
+        let connection_id = ConnectionId(11);
+        let (writer_tx, mut writer_rx) = mpsc::channel(1);
+
+        let mut connections = HashMap::new();
+        connections.insert(
+            connection_id,
+            OutboundConnectionState::new(
+                writer_tx,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(RwLock::new(HashSet::new())),
+                None,
+            ),
+        );
+
+        route_outgoing_envelope(
+            &mut connections,
+            OutgoingEnvelope::ToConnection {
+                connection_id,
+                message: OutgoingMessage::Response(OutgoingResponse {
+                    id: codex_app_server_protocol::RequestId::Integer(1),
+                    result: json!({
+                        "turn": {
+                            "id": "turn_123",
+                            "items": [
+                                {
+                                    "type": "guardianAssessment",
+                                    "id": "guardian_123",
+                                    "status": "denied",
+                                    "riskScore": 92,
+                                    "riskLevel": "high",
+                                    "rationale": "nope",
+                                    "action": { "tool": "shell" }
+                                },
+                                {
+                                    "type": "agentMessage",
+                                    "id": "msg_123",
+                                    "text": "hello",
+                                    "phase": null
+                                }
+                            ],
+                            "status": "completed",
+                            "error": null
+                        }
+                    }),
+                }),
+            },
+        )
+        .await;
+
+        let message = writer_rx
+            .recv()
+            .await
+            .expect("response should be delivered to the connection");
+        let json = serde_json::to_value(message).expect("response should serialize");
+        assert_eq!(
+            json["result"]["turn"]["items"],
+            json!([{
+                "type": "agentMessage",
+                "id": "msg_123",
+                "text": "hello",
+                "phase": null
+            }])
+        );
+    }
+
+    #[tokio::test]
     async fn broadcast_does_not_block_on_slow_connection() {
         let fast_connection_id = ConnectionId(1);
         let slow_connection_id = ConnectionId(2);
