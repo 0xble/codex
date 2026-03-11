@@ -4742,6 +4742,7 @@ impl ChatWidget {
                         target: ReviewTarget::Custom {
                             instructions: prepared_args,
                         },
+                        pathspecs: Vec::new(),
                         user_facing_hint: None,
                     },
                 });
@@ -8983,6 +8984,7 @@ impl ChatWidget {
                 tx.send(AppEvent::CodexOp(Op::Review {
                     review_request: ReviewRequest {
                         target: ReviewTarget::UncommittedChanges,
+                        pathspecs: Vec::new(),
                         user_facing_hint: None,
                     },
                 }));
@@ -9038,6 +9040,7 @@ impl ChatWidget {
                             target: ReviewTarget::BaseBranch {
                                 branch: branch.clone(),
                             },
+                            pathspecs: Vec::new(),
                             user_facing_hint: None,
                         },
                     }));
@@ -9076,6 +9079,7 @@ impl ChatWidget {
                                 sha: sha.clone(),
                                 title: Some(subject.clone()),
                             },
+                            pathspecs: Vec::new(),
                             user_facing_hint: None,
                         },
                     }));
@@ -9112,6 +9116,7 @@ impl ChatWidget {
                         target: ReviewTarget::Custom {
                             instructions: trimmed,
                         },
+                        pathspecs: Vec::new(),
                         user_facing_hint: None,
                     },
                 }));
@@ -9486,6 +9491,7 @@ pub(crate) fn show_review_commit_picker_with_entries(
                             sha: sha.clone(),
                             title: Some(subject.clone()),
                         },
+                        pathspecs: Vec::new(),
                         user_facing_hint: None,
                     },
                 }));

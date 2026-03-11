@@ -98,6 +98,7 @@ use uuid::Uuid;
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
+use crate::event_processor::ReviewLifecycleStatus;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
 use codex_core::find_thread_path_by_id_str;
@@ -145,6 +146,7 @@ struct ExecRunArgs {
     oss: bool,
     output_schema_path: Option<PathBuf>,
     prompt: Option<String>,
+    session_id: Option<String>,
     skip_git_repo_check: bool,
     stderr_with_ansi: bool,
 }
@@ -176,6 +178,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         skip_git_repo_check,
         add_dir,
         ephemeral,
+        session_id,
         color,
         last_message_file,
         json: json_mode,
@@ -194,6 +197,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             supports_color::on_cached(Stream::Stderr).is_some(),
         ),
     };
+
+    if command.is_some() && session_id.is_some() {
+        anyhow::bail!("`--session-id` is only valid when starting a fresh session");
+    }
     let cursor_ansi = if progress_cursor {
         true
     } else {
@@ -459,6 +466,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         oss,
         output_schema_path,
         prompt,
+        session_id,
         skip_git_repo_check,
         stderr_with_ansi,
     })
@@ -481,6 +489,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         oss,
         output_schema_path,
         prompt,
+        session_id,
         skip_git_repo_check,
         stderr_with_ansi,
     } = args;
@@ -565,7 +574,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     &client,
                     ClientRequest::ThreadStart {
                         request_id: request_ids.next(),
-                        params: thread_start_params_from_config(&config),
+                        params: thread_start_params_from_config(&config, session_id.clone()),
                     },
                     "thread/start",
                 )
@@ -580,7 +589,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 &client,
                 ClientRequest::ThreadStart {
                     request_id: request_ids.next(),
-                    params: thread_start_params_from_config(&config),
+                    params: thread_start_params_from_config(&config, session_id.clone()),
                 },
                 "thread/start",
             )
@@ -603,7 +612,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
         (Some(ExecCommand::Review(review_cli)), _, _) => {
             let review_request = build_review_request(review_cli)?;
-            let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);
+            let summary = codex_core::review_prompts::user_facing_hint(
+                &review_request.target,
+                review_request.pathspecs.as_deref(),
+            );
             (InitialOperation::Review { review_request }, summary)
         }
         (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
@@ -663,6 +675,8 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     // Print the effective configuration and initial request so users can see what Codex
     // is using.
     event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
+    let review_summary = matches!(&initial_operation, InitialOperation::Review { .. })
+        .then_some(prompt_summary.clone());
 
     info!("Codex initialized with event: {session_configured:?}");
 
@@ -715,6 +729,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     params: ReviewStartParams {
                         thread_id: primary_thread_id_for_span.clone(),
                         target: review_target_to_api(review_request.target),
+                        pathspecs: review_request.pathspecs,
                         delivery: None,
                     },
                 },
@@ -722,6 +737,9 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             )
             .await
             .map_err(anyhow::Error::msg)?;
+            if let Some(summary) = review_summary.as_deref() {
+                event_processor.print_review_started(summary);
+            }
             let task_id = response.turn.id;
             info!("Sent review request with event ID: {task_id}");
             task_id
@@ -734,6 +752,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
     let mut interrupt_channel_open = true;
+    let mut review_status_reported = false;
     let primary_thread_id_for_requests = primary_thread_id.to_string();
     loop {
         let server_event = if let Some(event) = buffered_events.pop_front() {
@@ -850,6 +869,40 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     _ => {}
                 }
 
+                if review_summary.is_some() && !review_status_reported {
+                    match &event.msg {
+                        EventMsg::ExitedReviewMode(payload) => {
+                            if let Some(status) = review_status_for_exit_payload(payload) {
+                                event_processor.print_review_status(status);
+                                review_status_reported = true;
+                            }
+                        }
+                        EventMsg::TurnComplete(payload) if payload.turn_id == task_id => {
+                            let review_output = payload
+                                .last_agent_message
+                                .as_deref()
+                                .and_then(try_parse_review_output_event);
+                            if let Some(output) = review_output.as_ref() {
+                                event_processor
+                                    .print_review_status(ReviewLifecycleStatus::Finished(output));
+                            } else {
+                                event_processor
+                                    .print_review_status(ReviewLifecycleStatus::EndedWithoutOutput);
+                            }
+                            review_status_reported = true;
+                        }
+                        EventMsg::TurnAborted(payload)
+                            if payload.turn_id.as_deref() == Some(task_id.as_str()) =>
+                        {
+                            event_processor.print_review_status(review_status_for_abort_reason(
+                                &payload.reason,
+                            ));
+                            review_status_reported = true;
+                        }
+                        _ => {}
+                    }
+                }
+
                 match event_processor.process_event(event) {
                     CodexStatus::Running => {}
                     CodexStatus::InitiateShutdown => {
@@ -910,10 +963,14 @@ fn sandbox_mode_from_policy(
     }
 }
 
-fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
+fn thread_start_params_from_config(
+    config: &Config,
+    requested_thread_id: Option<String>,
+) -> ThreadStartParams {
     ThreadStartParams {
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
+        thread_id: requested_thread_id,
         cwd: Some(config.cwd.to_string_lossy().to_string()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
@@ -1057,8 +1114,8 @@ fn session_configured_from_thread_response(
 
 fn review_target_to_api(target: ReviewTarget) -> ApiReviewTarget {
     match target {
-        ReviewTarget::StagedChanges => ApiReviewTarget::StagedChanges,
         ReviewTarget::UncommittedChanges => ApiReviewTarget::UncommittedChanges,
+        ReviewTarget::StagedChanges => ApiReviewTarget::StagedChanges,
         ReviewTarget::BaseBranch { branch } => ApiReviewTarget::BaseBranch { branch },
         ReviewTarget::Commit { sha, title } => ApiReviewTarget::Commit { sha, title },
         ReviewTarget::Custom { instructions } => ApiReviewTarget::Custom { instructions },
@@ -1578,10 +1635,11 @@ fn resolve_prompt(prompt_arg: Option<String>) -> String {
 }
 
 fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
-    let target = if args.staged {
-        ReviewTarget::StagedChanges
-    } else if args.uncommitted {
+    let pathspecs = resolve_review_pathspecs(args)?;
+    let target = if args.uncommitted {
         ReviewTarget::UncommittedChanges
+    } else if args.staged {
+        ReviewTarget::StagedChanges
     } else if let Some(branch) = args.base.clone() {
         ReviewTarget::BaseBranch { branch }
     } else if let Some(sha) = args.commit.clone() {
@@ -1589,7 +1647,7 @@ fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
             sha,
             title: args.commit_title.clone(),
         }
-    } else if let Some(prompt_arg) = args.prompt.clone() {
+    } else if let Some(prompt_arg) = args.instructions.clone().or_else(|| args.prompt.clone()) {
         let prompt = resolve_prompt(Some(prompt_arg)).trim().to_string();
         if prompt.is_empty() {
             anyhow::bail!("Review prompt cannot be empty");
@@ -1599,14 +1657,90 @@ fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
         }
     } else {
         anyhow::bail!(
-            "Specify --staged, --uncommitted, --base, --commit, or provide custom review instructions"
+            "Specify --uncommitted, --staged, --base, --commit, or provide custom review instructions"
         );
     };
 
     Ok(ReviewRequest {
         target,
+        pathspecs,
         user_facing_hint: None,
     })
+}
+
+fn resolve_review_pathspecs(args: &ReviewArgs) -> anyhow::Result<Option<Vec<String>>> {
+    if !args.paths.is_empty() {
+        return normalize_review_pathspecs(args.paths.clone());
+    }
+
+    let Some(path) = args.pathspec_from_file.as_deref() else {
+        return Ok(None);
+    };
+
+    let contents = std::fs::read_to_string(path).map_err(|error| {
+        anyhow::anyhow!("Failed to read pathspec file {}: {error}", path.display())
+    })?;
+    let pathspecs = contents.lines().map(ToString::to_string).collect();
+    normalize_review_pathspecs(pathspecs)
+}
+
+fn normalize_review_pathspecs(pathspecs: Vec<String>) -> anyhow::Result<Option<Vec<String>>> {
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+
+    for pathspec in pathspecs {
+        let trimmed = pathspec.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let owned = codex_core::review_prompts::normalize_repo_relative_pathspec(trimmed);
+        if seen.insert(owned.clone()) {
+            normalized.push(owned);
+        }
+    }
+
+    if normalized.is_empty() {
+        anyhow::bail!("Review pathspecs must include at least one non-empty path");
+    }
+
+    Ok(Some(normalized))
+}
+
+fn review_status_for_exit_payload(
+    payload: &codex_protocol::protocol::ExitedReviewModeEvent,
+) -> Option<ReviewLifecycleStatus<'_>> {
+    payload
+        .review_output
+        .as_ref()
+        .map(ReviewLifecycleStatus::Finished)
+}
+
+fn review_status_for_abort_reason(
+    reason: &codex_protocol::protocol::TurnAbortReason,
+) -> ReviewLifecycleStatus<'static> {
+    match reason {
+        codex_protocol::protocol::TurnAbortReason::ReviewEnded => {
+            ReviewLifecycleStatus::EndedWithoutOutput
+        }
+        codex_protocol::protocol::TurnAbortReason::Interrupted
+        | codex_protocol::protocol::TurnAbortReason::Replaced => ReviewLifecycleStatus::Interrupted,
+    }
+}
+
+fn try_parse_review_output_event(
+    text: &str,
+) -> Option<codex_protocol::protocol::ReviewOutputEvent> {
+    if let Ok(event) = serde_json::from_str::<codex_protocol::protocol::ReviewOutputEvent>(text) {
+        return Some(event);
+    }
+    if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}'))
+        && start < end
+        && let Some(slice) = text.get(start..=end)
+    {
+        return serde_json::from_str::<codex_protocol::protocol::ReviewOutputEvent>(slice).ok();
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1655,37 +1789,21 @@ mod tests {
     #[test]
     fn builds_uncommitted_review_request() {
         let args = ReviewArgs {
-            staged: false,
             uncommitted: true,
+            staged: false,
             base: None,
             commit: None,
             commit_title: None,
+            paths: Vec::new(),
+            pathspec_from_file: None,
+            instructions: None,
             prompt: None,
         };
         let request = build_review_request(&args).expect("builds uncommitted review request");
 
         let expected = ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
-            user_facing_hint: None,
-        };
-
-        assert_eq!(request, expected);
-    }
-
-    #[test]
-    fn builds_staged_review_request() {
-        let args = ReviewArgs {
-            staged: true,
-            uncommitted: false,
-            base: None,
-            commit: None,
-            commit_title: None,
-            prompt: None,
-        };
-        let request = build_review_request(&args).expect("builds staged review request");
-
-        let expected = ReviewRequest {
-            target: ReviewTarget::StagedChanges,
+            pathspecs: None,
             user_facing_hint: None,
         };
 
@@ -1695,11 +1813,14 @@ mod tests {
     #[test]
     fn builds_commit_review_request_with_title() {
         let args = ReviewArgs {
-            staged: false,
             uncommitted: false,
+            staged: false,
             base: None,
             commit: Some("123456789".to_string()),
             commit_title: Some("Add review command".to_string()),
+            paths: Vec::new(),
+            pathspec_from_file: None,
+            instructions: None,
             prompt: None,
         };
         let request = build_review_request(&args).expect("builds commit review request");
@@ -1709,6 +1830,7 @@ mod tests {
                 sha: "123456789".to_string(),
                 title: Some("Add review command".to_string()),
             },
+            pathspecs: None,
             user_facing_hint: None,
         };
 
@@ -1718,11 +1840,14 @@ mod tests {
     #[test]
     fn builds_custom_review_request_trims_prompt() {
         let args = ReviewArgs {
-            staged: false,
             uncommitted: false,
+            staged: false,
             base: None,
             commit: None,
             commit_title: None,
+            paths: Vec::new(),
+            pathspec_from_file: None,
+            instructions: None,
             prompt: Some("  custom review instructions  ".to_string()),
         };
         let request = build_review_request(&args).expect("builds custom review request");
@@ -1731,6 +1856,163 @@ mod tests {
             target: ReviewTarget::Custom {
                 instructions: "custom review instructions".to_string(),
             },
+            pathspecs: None,
+            user_facing_hint: None,
+        };
+
+        assert_eq!(request, expected);
+    }
+
+    #[test]
+    fn builds_staged_review_request() {
+        let args = ReviewArgs {
+            uncommitted: false,
+            staged: true,
+            base: None,
+            commit: None,
+            commit_title: None,
+            paths: Vec::new(),
+            pathspec_from_file: None,
+            instructions: None,
+            prompt: None,
+        };
+        let request = build_review_request(&args).expect("builds staged review request");
+
+        let expected = ReviewRequest {
+            target: ReviewTarget::StagedChanges,
+            pathspecs: None,
+            user_facing_hint: None,
+        };
+
+        assert_eq!(request, expected);
+    }
+
+    #[test]
+    fn builds_review_request_with_paths() {
+        let args = ReviewArgs {
+            uncommitted: true,
+            staged: false,
+            base: None,
+            commit: None,
+            commit_title: None,
+            paths: vec![
+                " src/lib.rs ".to_string(),
+                "src/main.rs".to_string(),
+                "src/lib.rs".to_string(),
+            ],
+            pathspec_from_file: None,
+            instructions: None,
+            prompt: None,
+        };
+        let request = build_review_request(&args).expect("builds review request with paths");
+
+        let expected = ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            pathspecs: Some(vec!["src/lib.rs".to_string(), "src/main.rs".to_string()]),
+            user_facing_hint: None,
+        };
+
+        assert_eq!(request, expected);
+    }
+
+    #[test]
+    fn builds_review_request_with_dot_slash_paths() {
+        let args = ReviewArgs {
+            uncommitted: true,
+            staged: false,
+            base: None,
+            commit: None,
+            commit_title: None,
+            paths: vec!["./src/lib.rs".to_string(), "././src/main.rs".to_string()],
+            pathspec_from_file: None,
+            instructions: None,
+            prompt: None,
+        };
+        let request = build_review_request(&args).expect("builds review request with paths");
+
+        let expected = ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            pathspecs: Some(vec!["src/lib.rs".to_string(), "src/main.rs".to_string()]),
+            user_facing_hint: None,
+        };
+
+        assert_eq!(request, expected);
+    }
+
+    #[test]
+    fn builds_review_request_with_pathspec_file() {
+        let tmp = tempfile::NamedTempFile::new().expect("temp file");
+        std::fs::write(tmp.path(), " src/lib.rs \nsrc/main.rs\n\nsrc/lib.rs\n")
+            .expect("write pathspec file");
+
+        let args = ReviewArgs {
+            uncommitted: true,
+            staged: false,
+            base: None,
+            commit: None,
+            commit_title: None,
+            paths: Vec::new(),
+            pathspec_from_file: Some(tmp.path().to_path_buf()),
+            instructions: None,
+            prompt: None,
+        };
+        let request =
+            build_review_request(&args).expect("builds review request with pathspec file");
+
+        let expected = ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            pathspecs: Some(vec!["src/lib.rs".to_string(), "src/main.rs".to_string()]),
+            user_facing_hint: None,
+        };
+
+        assert_eq!(request, expected);
+    }
+
+    #[test]
+    fn rejects_empty_review_pathspec_file() {
+        let tmp = tempfile::NamedTempFile::new().expect("temp file");
+        std::fs::write(tmp.path(), " \n\t\n").expect("write pathspec file");
+
+        let args = ReviewArgs {
+            uncommitted: true,
+            staged: false,
+            base: None,
+            commit: None,
+            commit_title: None,
+            paths: Vec::new(),
+            pathspec_from_file: Some(tmp.path().to_path_buf()),
+            instructions: None,
+            prompt: None,
+        };
+        let error = build_review_request(&args).expect_err("rejects empty pathspec file");
+
+        assert_eq!(
+            error.to_string(),
+            "Review pathspecs must include at least one non-empty path"
+        );
+    }
+
+    #[test]
+    fn builds_custom_review_request_from_instructions_flag() {
+        let args = ReviewArgs {
+            uncommitted: false,
+            staged: false,
+            base: None,
+            commit: None,
+            commit_title: None,
+            paths: vec!["src/lib.rs".to_string(), "src/main.rs".to_string()],
+            pathspec_from_file: None,
+            instructions: Some("  focus on panics  ".to_string()),
+            prompt: None,
+        };
+        let request =
+            build_review_request(&args).expect("builds custom review request from instructions");
+
+        let expected = ReviewRequest {
+            target: ReviewTarget::Custom {
+                instructions: "focus on panics".to_string(),
+            },
+            pathspecs: Some(vec!["src/lib.rs".to_string(), "src/main.rs".to_string()]),
             user_facing_hint: None,
         };
 
@@ -1810,6 +2092,56 @@ mod tests {
         let err = decode_prompt_bytes(&input).expect_err("invalid utf-8 should fail");
 
         assert_eq!(err, PromptDecodeError::InvalidUtf8 { valid_up_to: 0 });
+    }
+
+    #[test]
+    fn exited_review_mode_without_output_is_not_terminal() {
+        let payload = codex_protocol::protocol::ExitedReviewModeEvent {
+            review_output: None,
+        };
+
+        assert!(review_status_for_exit_payload(&payload).is_none());
+    }
+
+    #[test]
+    fn exited_review_mode_with_output_reports_finished() {
+        let payload = codex_protocol::protocol::ExitedReviewModeEvent {
+            review_output: Some(codex_protocol::protocol::ReviewOutputEvent::default()),
+        };
+
+        assert!(matches!(
+            review_status_for_exit_payload(&payload),
+            Some(ReviewLifecycleStatus::Finished(_))
+        ));
+    }
+
+    #[test]
+    fn review_ended_abort_reports_ended_without_output() {
+        assert!(matches!(
+            review_status_for_abort_reason(&codex_protocol::protocol::TurnAbortReason::ReviewEnded),
+            ReviewLifecycleStatus::EndedWithoutOutput
+        ));
+    }
+
+    #[test]
+    fn try_parse_review_output_event_returns_none_for_missing_output() {
+        assert!(try_parse_review_output_event("not json").is_none());
+    }
+
+    #[test]
+    fn interrupted_abort_reports_interrupted() {
+        assert!(matches!(
+            review_status_for_abort_reason(&codex_protocol::protocol::TurnAbortReason::Interrupted),
+            ReviewLifecycleStatus::Interrupted
+        ));
+    }
+
+    #[test]
+    fn replaced_abort_reports_interrupted() {
+        assert!(matches!(
+            review_status_for_abort_reason(&codex_protocol::protocol::TurnAbortReason::Replaced),
+            ReviewLifecycleStatus::Interrupted
+        ));
     }
 
     #[test]

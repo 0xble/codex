@@ -2545,6 +2545,8 @@ pub enum ReviewTarget {
 /// Review request sent to the review session.
 pub struct ReviewRequest {
     pub target: ReviewTarget,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pathspecs: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub user_facing_hint: Option<String>,

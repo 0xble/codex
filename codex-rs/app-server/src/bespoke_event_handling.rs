@@ -1358,9 +1358,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::EnteredReviewMode(review_request) => {
-            let review = review_request
-                .user_facing_hint
-                .unwrap_or_else(|| review_prompts::user_facing_hint(&review_request.target));
+            let review = review_request.user_facing_hint.clone().unwrap_or_else(|| {
+                review_prompts::user_facing_hint_for_request(&review_request)
+                    .unwrap_or_else(|_| review_prompts::user_facing_hint(&review_request.target))
+            });
             let item = ThreadItem::EnteredReviewMode {
                 id: event_turn_id.clone(),
                 review,
