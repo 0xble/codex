@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use codex_git::StagedReviewSnapshot;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -29,12 +30,16 @@ use codex_protocol::user_input::UserInput;
 use super::SessionTask;
 use super::SessionTaskContext;
 
-#[derive(Clone, Copy)]
-pub(crate) struct ReviewTask;
+#[derive(Clone)]
+pub(crate) struct ReviewTask {
+    _staged_snapshot: Option<Arc<StagedReviewSnapshot>>,
+}
 
 impl ReviewTask {
-    pub(crate) fn new() -> Self {
-        Self
+    pub(crate) fn new(staged_snapshot: Option<Arc<StagedReviewSnapshot>>) -> Self {
+        Self {
+            _staged_snapshot: staged_snapshot,
+        }
     }
 }
 
