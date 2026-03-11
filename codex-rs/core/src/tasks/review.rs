@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use codex_git_utils::StagedReviewSnapshot;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -39,12 +40,16 @@ static REVIEW_EXIT_SUCCESS_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
         .unwrap_or_else(|err| panic!("review exit success template must parse: {err}"))
 });
 
-#[derive(Clone, Copy)]
-pub(crate) struct ReviewTask;
+#[derive(Clone)]
+pub(crate) struct ReviewTask {
+    _staged_snapshot: Option<Arc<StagedReviewSnapshot>>,
+}
 
 impl ReviewTask {
-    pub(crate) fn new() -> Self {
-        Self
+    pub(crate) fn new(staged_snapshot: Option<Arc<StagedReviewSnapshot>>) -> Self {
+        Self {
+            _staged_snapshot: staged_snapshot,
+        }
     }
 }
 

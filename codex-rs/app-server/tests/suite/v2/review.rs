@@ -27,6 +27,8 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::path::Path;
+use std::process::Command;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -137,6 +139,56 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
     assert!(review.contains("/tmp/file.rs:10-20"));
 
     Ok(())
+}
+
+#[tokio::test]
+async fn review_start_accepts_staged_target_and_emits_staged_banner() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    let repo = create_git_repo()?;
+    stage_file_change(
+        repo.path(),
+        "src/lib.rs",
+        "pub fn staged() -> bool { true }\n",
+    )?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_id = start_thread_in_cwd(&mut mcp, repo.path()).await?;
+
+    let review_req = mcp
+        .send_review_start_request(ReviewStartParams {
+            thread_id,
+            delivery: Some(ReviewDelivery::Inline),
+            target: ReviewTarget::StagedChanges,
+        })
+        .await?;
+    let review_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(review_req)),
+    )
+    .await??;
+    let ReviewStartResponse { turn, .. } = to_response::<ReviewStartResponse>(review_resp)?;
+
+    for _ in 0..10 {
+        let item_started: JSONRPCNotification = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("item/started"),
+        )
+        .await??;
+        let started: ItemStartedNotification =
+            serde_json::from_value(item_started.params.expect("params must be present"))?;
+        if let ThreadItem::EnteredReviewMode { id, review } = started.item {
+            assert_eq!(id, turn.id);
+            assert_eq!(review, "staged changes");
+            return Ok(());
+        }
+    }
+
+    panic!("did not observe enteredReviewMode item for staged review");
 }
 
 #[tokio::test]
@@ -406,9 +458,14 @@ async fn review_start_rejects_empty_custom_instructions() -> Result<()> {
 }
 
 async fn start_default_thread(mcp: &mut McpProcess) -> Result<String> {
+    start_thread_in_cwd(mcp, Path::new("/")).await
+}
+
+async fn start_thread_in_cwd(mcp: &mut McpProcess, cwd: &Path) -> Result<String> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            cwd: Some(cwd.to_string_lossy().into_owned()),
             ..Default::default()
         })
         .await?;
@@ -424,6 +481,42 @@ async fn start_default_thread(mcp: &mut McpProcess) -> Result<String> {
     )
     .await??;
     Ok(thread.id)
+}
+
+fn create_git_repo() -> Result<TempDir> {
+    let repo = TempDir::new()?;
+    run_git(repo.path(), &["init", "-b", "main"])?;
+    run_git(repo.path(), &["config", "user.email", "test@example.com"])?;
+    run_git(repo.path(), &["config", "user.name", "Test User"])?;
+
+    std::fs::create_dir_all(repo.path().join("src"))?;
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn staged() -> bool { false }\n",
+    )?;
+    std::fs::write(repo.path().join("src/main.rs"), "fn main() {}\n")?;
+    run_git(repo.path(), &["add", "src/lib.rs", "src/main.rs"])?;
+    run_git(repo.path(), &["commit", "-m", "initial"])?;
+
+    Ok(repo)
+}
+
+fn stage_file_change(repo: &Path, path: &str, contents: &str) -> Result<()> {
+    std::fs::write(repo.join(path), contents)?;
+    run_git(repo, &["add", path])?;
+    Ok(())
+}
+
+fn run_git(repo: &Path, args: &[&str]) -> Result<()> {
+    let output = Command::new("git").current_dir(repo).args(args).output()?;
+    anyhow::ensure!(
+        output.status.success(),
+        "git {:?} failed: stdout={} stderr={}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
 }
 
 async fn materialize_thread_rollout(mcp: &mut McpProcess, thread_id: &str) -> Result<()> {

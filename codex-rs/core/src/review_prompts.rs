@@ -13,6 +13,7 @@ pub struct ResolvedReviewRequest {
 }
 
 const UNCOMMITTED_PROMPT: &str = "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.";
+const STAGED_PROMPT: &str = "Review only the staged code changes. You are running in a temporary snapshot that contains exactly the staged content. Start by inspecting the staged diff with `git diff --cached`. Provide prioritized, actionable findings.";
 
 const BASE_BRANCH_PROMPT_BACKUP: &str = "Review the code changes against the base branch '{{branch}}'. Start by finding the merge diff between the current branch and {{branch}}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{{branch}}@{upstream}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {{branch}} branch. Provide prioritized, actionable findings.";
 const BASE_BRANCH_PROMPT: &str = "Review the code changes against the base branch '{{base_branch}}'. The merge base commit for this comparison is {{merge_base_sha}}. Run `git diff {{merge_base_sha}}` to inspect the changes relative to {{base_branch}}. Provide prioritized, actionable findings.";
@@ -56,6 +57,7 @@ pub fn resolve_review_request(
 pub fn review_prompt(target: &ReviewTarget, cwd: &Path) -> anyhow::Result<String> {
     match target {
         ReviewTarget::UncommittedChanges => Ok(UNCOMMITTED_PROMPT.to_string()),
+        ReviewTarget::StagedChanges => Ok(STAGED_PROMPT.to_string()),
         ReviewTarget::BaseBranch { branch } => {
             if let Some(commit) = merge_base_with_head(cwd, branch)? {
                 Ok(render_review_prompt(
@@ -107,6 +109,7 @@ fn render_review_prompt<'a, const N: usize>(
 pub fn user_facing_hint(target: &ReviewTarget) -> String {
     match target {
         ReviewTarget::UncommittedChanges => "current changes".to_string(),
+        ReviewTarget::StagedChanges => "staged changes".to_string(),
         ReviewTarget::BaseBranch { branch } => format!("changes against '{branch}'"),
         ReviewTarget::Commit { sha, title } => {
             let short_sha: String = sha.chars().take(7).collect();
@@ -180,6 +183,20 @@ mod tests {
             )
             .expect("commit prompt should render"),
             "Review the code changes introduced by commit deadbeef (\"Fix bug\"). Provide prioritized, actionable findings."
+        );
+    }
+
+    #[test]
+    fn staged_review_prompt_and_hint_are_specific() {
+        let prompt =
+            review_prompt(&ReviewTarget::StagedChanges, std::path::Path::new("."))
+                .expect("staged prompt");
+
+        assert!(prompt.contains("temporary snapshot"));
+        assert!(prompt.contains("git diff --cached"));
+        assert_eq!(
+            user_facing_hint(&ReviewTarget::StagedChanges),
+            "staged changes"
         );
     }
 }
