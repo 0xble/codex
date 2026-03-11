@@ -601,7 +601,8 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
         (Some(ExecCommand::Review(review_cli)), _, _) => {
             let review_request = build_review_request(review_cli)?;
-            let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);
+            let summary =
+                codex_core::review_prompts::user_facing_hint_for_request(&review_request)?;
             (InitialOperation::Review { review_request }, summary)
         }
         (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
@@ -705,13 +706,17 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             task_id
         }
         InitialOperation::Review { review_request } => {
+            let ReviewRequest {
+                target, pathspecs, ..
+            } = review_request;
             let response: ReviewStartResponse = send_request_with_response(
                 &client,
                 ClientRequest::ReviewStart {
                     request_id: request_ids.next(),
                     params: ReviewStartParams {
                         thread_id: primary_thread_id_for_span.clone(),
-                        target: review_target_to_api(review_request.target),
+                        target: review_target_to_api(target),
+                        pathspecs,
                         delivery: None,
                     },
                 },
@@ -1553,6 +1558,7 @@ fn resolve_prompt(prompt_arg: Option<String>) -> String {
 }
 
 fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
+    let pathspecs = resolve_review_pathspecs(args)?;
     let target = if args.uncommitted {
         ReviewTarget::UncommittedChanges
     } else if let Some(branch) = args.base.clone() {
@@ -1578,8 +1584,35 @@ fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
 
     Ok(ReviewRequest {
         target,
+        pathspecs,
         user_facing_hint: None,
     })
+}
+
+fn resolve_review_pathspecs(args: &ReviewArgs) -> anyhow::Result<Vec<String>> {
+    if !args.pathspecs.is_empty() {
+        return Ok(args.pathspecs.clone());
+    }
+
+    let Some(path) = args.pathspec_from_file.as_deref() else {
+        return Ok(Vec::new());
+    };
+
+    let contents = std::fs::read_to_string(path).map_err(|error| {
+        anyhow::anyhow!("Failed to read pathspec file {}: {error}", path.display())
+    })?;
+    let pathspecs = contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+
+    if pathspecs.is_empty() {
+        anyhow::bail!("Review pathspecs must include at least one non-empty path");
+    }
+
+    Ok(pathspecs)
 }
 
 #[cfg(test)]
@@ -1630,12 +1663,15 @@ mod tests {
             base: None,
             commit: None,
             commit_title: None,
+            pathspecs: Vec::new(),
+            pathspec_from_file: None,
             prompt: None,
         };
         let request = build_review_request(&args).expect("builds uncommitted review request");
 
         let expected = ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
+            pathspecs: Vec::new(),
             user_facing_hint: None,
         };
 
@@ -1649,6 +1685,8 @@ mod tests {
             base: None,
             commit: Some("123456789".to_string()),
             commit_title: Some("Add review command".to_string()),
+            pathspecs: Vec::new(),
+            pathspec_from_file: None,
             prompt: None,
         };
         let request = build_review_request(&args).expect("builds commit review request");
@@ -1658,6 +1696,7 @@ mod tests {
                 sha: "123456789".to_string(),
                 title: Some("Add review command".to_string()),
             },
+            pathspecs: Vec::new(),
             user_facing_hint: None,
         };
 
@@ -1671,6 +1710,8 @@ mod tests {
             base: None,
             commit: None,
             commit_title: None,
+            pathspecs: Vec::new(),
+            pathspec_from_file: None,
             prompt: Some("  custom review instructions  ".to_string()),
         };
         let request = build_review_request(&args).expect("builds custom review request");
@@ -1679,10 +1720,76 @@ mod tests {
             target: ReviewTarget::Custom {
                 instructions: "custom review instructions".to_string(),
             },
+            pathspecs: Vec::new(),
             user_facing_hint: None,
         };
 
         assert_eq!(request, expected);
+    }
+
+    #[test]
+    fn builds_review_request_keeps_pathspecs_as_transport_input() {
+        let args = ReviewArgs {
+            uncommitted: true,
+            base: None,
+            commit: None,
+            commit_title: None,
+            pathspecs: vec![
+                " src ".to_string(),
+                "tests".to_string(),
+                "tests".to_string(),
+            ],
+            pathspec_from_file: None,
+            prompt: None,
+        };
+
+        let request = build_review_request(&args).expect("builds path-filtered review request");
+
+        assert_eq!(request.pathspecs, args.pathspecs);
+    }
+
+    #[test]
+    fn builds_review_request_from_pathspec_file() {
+        let tmp = tempfile::NamedTempFile::new().expect("create pathspec file");
+        std::fs::write(tmp.path(), "src/lib.rs\n\nsrc/main.rs\n").expect("write pathspec file");
+
+        let args = ReviewArgs {
+            uncommitted: true,
+            base: None,
+            commit: None,
+            commit_title: None,
+            pathspecs: Vec::new(),
+            pathspec_from_file: Some(tmp.path().to_path_buf()),
+            prompt: None,
+        };
+
+        let request = build_review_request(&args).expect("builds path-filtered review request");
+
+        assert_eq!(request.pathspecs, vec!["src/lib.rs", "src/main.rs"]);
+    }
+
+    #[test]
+    fn rejects_empty_pathspec_file() {
+        let tmp = tempfile::NamedTempFile::new().expect("create pathspec file");
+        std::fs::write(tmp.path(), " \n\t\n").expect("write pathspec file");
+
+        let args = ReviewArgs {
+            uncommitted: true,
+            base: None,
+            commit: None,
+            commit_title: None,
+            pathspecs: Vec::new(),
+            pathspec_from_file: Some(tmp.path().to_path_buf()),
+            prompt: None,
+        };
+
+        let error = build_review_request(&args).expect_err("rejects empty pathspec file");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Review pathspecs must include at least one non-empty path")
+        );
     }
 
     #[test]

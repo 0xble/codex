@@ -3537,6 +3537,8 @@ pub struct TurnStartParams {
 pub struct ReviewStartParams {
     pub thread_id: String,
     pub target: ReviewTarget,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pathspecs: Vec<String>,
 
     /// Where to run the review: inline (default) on the current thread or
     /// detached on a new thread (returned in `reviewThreadId`).

@@ -5255,6 +5255,7 @@ async fn spawn_review_thread(
     // Announce entering review mode so UIs can switch modes.
     let review_request = ReviewRequest {
         target: resolved.target,
+        pathspecs: resolved.pathspecs,
         user_facing_hint: Some(resolved.user_facing_hint),
     };
     sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))

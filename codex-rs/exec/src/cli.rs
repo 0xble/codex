@@ -244,6 +244,32 @@ pub struct ReviewArgs {
     #[arg(long = "title", value_name = "TITLE", requires = "commit")]
     pub commit_title: Option<String>,
 
+    /// Restrict review findings to the given repo-relative paths.
+    ///
+    /// You can either repeat the flag (`--paths a --paths b`) or pass
+    /// multiple paths after a single flag (`--paths a b`).
+    ///
+    /// For multi-path custom reviews that use the positional prompt, separate
+    /// the prompt with `--`.
+    #[arg(
+        long = "paths",
+        alias = "path",
+        value_name = "PATH",
+        num_args = 1..,
+        action = clap::ArgAction::Append,
+        conflicts_with = "pathspec_from_file"
+    )]
+    pub pathspecs: Vec<String>,
+
+    /// Read review pathspecs from a file, one path per line.
+    #[arg(
+        long = "pathspec-from-file",
+        value_name = "FILE",
+        value_hint = clap::ValueHint::FilePath,
+        conflicts_with = "pathspecs"
+    )]
+    pub pathspec_from_file: Option<PathBuf>,
+
     /// Custom review instructions. If `-` is used, read from stdin.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
     pub prompt: Option<String>,
@@ -261,6 +287,7 @@ pub enum Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -314,5 +341,58 @@ mod tests {
         };
         assert_eq!(args.session_id.as_deref(), Some("session-123"));
         assert_eq!(args.prompt.as_deref(), Some(PROMPT));
+    }
+
+    #[test]
+    fn review_accepts_listable_paths_flag() {
+        let cli = Cli::parse_from([
+            "codex-exec",
+            "review",
+            "--uncommitted",
+            "--paths",
+            "src/lib.rs",
+            "src/main.rs",
+        ]);
+
+        let Some(Command::Review(args)) = cli.command else {
+            panic!("expected review command");
+        };
+        assert_eq!(args.pathspecs, vec!["src/lib.rs", "src/main.rs"]);
+    }
+
+    #[test]
+    fn review_accepts_repeated_paths_flag() {
+        let cli = Cli::parse_from([
+            "codex-exec",
+            "review",
+            "--paths",
+            "src/lib.rs",
+            "--paths",
+            "src/main.rs",
+        ]);
+
+        let Some(Command::Review(args)) = cli.command else {
+            panic!("expected review command");
+        };
+        assert_eq!(args.pathspecs, vec!["src/lib.rs", "src/main.rs"]);
+    }
+
+    #[test]
+    fn review_accepts_prompt_after_paths_separator() {
+        let cli = Cli::parse_from([
+            "codex-exec",
+            "review",
+            "--paths",
+            "src/lib.rs",
+            "src/main.rs",
+            "--",
+            "focus on reviewer ergonomics",
+        ]);
+
+        let Some(Command::Review(args)) = cli.command else {
+            panic!("expected review command");
+        };
+        assert_eq!(args.pathspecs, vec!["src/lib.rs", "src/main.rs"]);
+        assert_eq!(args.prompt.as_deref(), Some("focus on reviewer ergonomics"));
     }
 }
