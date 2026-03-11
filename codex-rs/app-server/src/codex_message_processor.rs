@@ -568,6 +568,7 @@ impl CodexMessageProcessor {
         }
 
         let cleaned_target = match target {
+            ApiReviewTarget::StagedChanges => ApiReviewTarget::StagedChanges,
             ApiReviewTarget::UncommittedChanges => ApiReviewTarget::UncommittedChanges,
             ApiReviewTarget::BaseBranch { branch } => {
                 let branch = branch.trim().to_string();
@@ -600,6 +601,7 @@ impl CodexMessageProcessor {
         };
 
         let core_target = match cleaned_target {
+            ApiReviewTarget::StagedChanges => CoreReviewTarget::StagedChanges,
             ApiReviewTarget::UncommittedChanges => CoreReviewTarget::UncommittedChanges,
             ApiReviewTarget::BaseBranch { branch } => CoreReviewTarget::BaseBranch { branch },
             ApiReviewTarget::Commit { sha, title } => CoreReviewTarget::Commit { sha, title },

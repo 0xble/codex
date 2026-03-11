@@ -3561,6 +3561,9 @@ pub struct ReviewStartResponse {
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type", export_to = "v2/")]
 pub enum ReviewTarget {
+    /// Review only the currently staged changes.
+    StagedChanges,
+
     /// Review the working tree: staged, unstaged, and untracked files.
     UncommittedChanges,
 

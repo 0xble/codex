@@ -1033,6 +1033,7 @@ fn session_configured_from_thread_response(
 
 fn review_target_to_api(target: ReviewTarget) -> ApiReviewTarget {
     match target {
+        ReviewTarget::StagedChanges => ApiReviewTarget::StagedChanges,
         ReviewTarget::UncommittedChanges => ApiReviewTarget::UncommittedChanges,
         ReviewTarget::BaseBranch { branch } => ApiReviewTarget::BaseBranch { branch },
         ReviewTarget::Commit { sha, title } => ApiReviewTarget::Commit { sha, title },
@@ -1553,7 +1554,9 @@ fn resolve_prompt(prompt_arg: Option<String>) -> String {
 }
 
 fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
-    let target = if args.uncommitted {
+    let target = if args.staged {
+        ReviewTarget::StagedChanges
+    } else if args.uncommitted {
         ReviewTarget::UncommittedChanges
     } else if let Some(branch) = args.base.clone() {
         ReviewTarget::BaseBranch { branch }
@@ -1572,7 +1575,7 @@ fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
         }
     } else {
         anyhow::bail!(
-            "Specify --uncommitted, --base, --commit, or provide custom review instructions"
+            "Specify --staged, --uncommitted, --base, --commit, or provide custom review instructions"
         );
     };
 
@@ -1626,6 +1629,7 @@ mod tests {
     #[test]
     fn builds_uncommitted_review_request() {
         let args = ReviewArgs {
+            staged: false,
             uncommitted: true,
             base: None,
             commit: None,
@@ -1643,8 +1647,29 @@ mod tests {
     }
 
     #[test]
+    fn builds_staged_review_request() {
+        let args = ReviewArgs {
+            staged: true,
+            uncommitted: false,
+            base: None,
+            commit: None,
+            commit_title: None,
+            prompt: None,
+        };
+        let request = build_review_request(&args).expect("builds staged review request");
+
+        let expected = ReviewRequest {
+            target: ReviewTarget::StagedChanges,
+            user_facing_hint: None,
+        };
+
+        assert_eq!(request, expected);
+    }
+
+    #[test]
     fn builds_commit_review_request_with_title() {
         let args = ReviewArgs {
+            staged: false,
             uncommitted: false,
             base: None,
             commit: Some("123456789".to_string()),
@@ -1667,6 +1692,7 @@ mod tests {
     #[test]
     fn builds_custom_review_request_trims_prompt() {
         let args = ReviewArgs {
+            staged: false,
             uncommitted: false,
             base: None,
             commit: None,
