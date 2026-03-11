@@ -626,6 +626,7 @@ impl CodexMessageProcessor {
 
     fn review_request_from_target(
         target: ApiReviewTarget,
+        pathspecs: Vec<String>,
     ) -> Result<(ReviewRequest, String), JSONRPCErrorError> {
         fn invalid_request(message: String) -> JSONRPCErrorError {
             JSONRPCErrorError {
@@ -676,10 +677,16 @@ impl CodexMessageProcessor {
             ApiReviewTarget::Custom { instructions } => CoreReviewTarget::Custom { instructions },
         };
 
-        let hint = codex_core::review_prompts::user_facing_hint(&core_target);
         let review_request = ReviewRequest {
             target: core_target,
+            pathspecs,
+            user_facing_hint: None,
+        };
+        let hint = codex_core::review_prompts::user_facing_hint_for_request(&review_request)
+            .map_err(|err| invalid_request(err.to_string()))?;
+        let review_request = ReviewRequest {
             user_facing_hint: Some(hint.clone()),
+            ..review_request
         };
 
         Ok((review_request, hint))
@@ -6937,6 +6944,7 @@ impl CodexMessageProcessor {
         let ReviewStartParams {
             thread_id,
             target,
+            pathspecs,
             delivery,
         } = params;
         let (parent_thread_id, parent_thread) = match self.load_thread(&thread_id).await {
@@ -6947,13 +6955,14 @@ impl CodexMessageProcessor {
             }
         };
 
-        let (review_request, display_text) = match Self::review_request_from_target(target) {
-            Ok(value) => value,
-            Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
-                return;
-            }
-        };
+        let (review_request, display_text) =
+            match Self::review_request_from_target(target, pathspecs) {
+                Ok(value) => value,
+                Err(err) => {
+                    self.outgoing.send_error(request_id, err).await;
+                    return;
+                }
+            };
 
         let delivery = delivery.unwrap_or(ApiReviewDelivery::Inline).to_core();
         match delivery {

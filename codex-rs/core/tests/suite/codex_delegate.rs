@@ -76,6 +76,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
                 target: ReviewTarget::Custom {
                     instructions: "Please review".to_string(),
                 },
+                pathspecs: Vec::new(),
                 user_facing_hint: None,
             },
         })
@@ -159,6 +160,7 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
                 target: ReviewTarget::Custom {
                     instructions: "Please review".to_string(),
                 },
+                pathspecs: Vec::new(),
                 user_facing_hint: None,
             },
         })
@@ -218,6 +220,7 @@ async fn codex_delegate_ignores_legacy_deltas() {
                 target: ReviewTarget::Custom {
                     instructions: "Please review".to_string(),
                 },
+                pathspecs: Vec::new(),
                 user_facing_hint: None,
             },
         })

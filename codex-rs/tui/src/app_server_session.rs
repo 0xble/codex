@@ -585,12 +585,14 @@ impl AppServerSession {
         review_request: ReviewRequest,
     ) -> Result<ReviewStartResponse> {
         let request_id = self.next_request_id();
+        let ReviewRequest { target, pathspecs, .. } = review_request;
         self.client
             .request_typed(ClientRequest::ReviewStart {
                 request_id,
                 params: ReviewStartParams {
                     thread_id: thread_id.to_string(),
-                    target: review_target_to_app_server(review_request.target),
+                    target: review_target_to_app_server(target),
+                    pathspecs,
                     delivery: Some(ReviewDelivery::Inline),
                 },
             })
@@ -1006,6 +1008,9 @@ fn review_target_to_app_server(
     target: CoreReviewTarget,
 ) -> codex_app_server_protocol::ReviewTarget {
     match target {
+        CoreReviewTarget::StagedChanges => {
+            codex_app_server_protocol::ReviewTarget::StagedChanges
+        }
         CoreReviewTarget::UncommittedChanges => {
             codex_app_server_protocol::ReviewTarget::UncommittedChanges
         }

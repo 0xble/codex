@@ -82,6 +82,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
                 target: ReviewTarget::Custom {
                     instructions: "Please review my changes".to_string(),
                 },
+                pathspecs: Vec::new(),
                 user_facing_hint: None,
             },
         })
@@ -204,6 +205,7 @@ async fn review_op_with_plain_text_emits_review_fallback() {
                 target: ReviewTarget::Custom {
                     instructions: "Plain text review".to_string(),
                 },
+                pathspecs: Vec::new(),
                 user_facing_hint: None,
             },
         })
@@ -266,6 +268,7 @@ async fn review_filters_agent_message_related_events() {
                 target: ReviewTarget::Custom {
                     instructions: "Filter streaming events".to_string(),
                 },
+                pathspecs: Vec::new(),
                 user_facing_hint: None,
             },
         })
@@ -349,6 +352,7 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
                 target: ReviewTarget::Custom {
                     instructions: "check structured".to_string(),
                 },
+                pathspecs: Vec::new(),
                 user_facing_hint: None,
             },
         })
@@ -410,6 +414,7 @@ async fn review_uses_custom_review_model_from_config() {
                 target: ReviewTarget::Custom {
                     instructions: "use custom model".to_string(),
                 },
+                pathspecs: Vec::new(),
                 user_facing_hint: None,
             },
         })
@@ -464,6 +469,7 @@ async fn review_uses_session_model_when_review_model_unset() {
                 target: ReviewTarget::Custom {
                     instructions: "use session model".to_string(),
                 },
+                pathspecs: Vec::new(),
                 user_facing_hint: None,
             },
         })
@@ -583,6 +589,7 @@ async fn review_input_isolated_from_parent_history() {
                 target: ReviewTarget::Custom {
                     instructions: review_prompt.clone(),
                 },
+                pathspecs: Vec::new(),
                 user_facing_hint: None,
             },
         })
@@ -700,6 +707,7 @@ async fn review_history_surfaces_in_parent_session() {
                 target: ReviewTarget::Custom {
                     instructions: "Start a review".to_string(),
                 },
+                pathspecs: Vec::new(),
                 user_facing_hint: None,
             },
         })
@@ -854,6 +862,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
                 target: ReviewTarget::BaseBranch {
                     branch: "main".to_string(),
                 },
+                pathspecs: Vec::new(),
                 user_facing_hint: None,
             },
         })

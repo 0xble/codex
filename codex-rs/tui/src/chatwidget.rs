@@ -5482,6 +5482,7 @@ impl ChatWidget {
                     target: ReviewTarget::Custom {
                         instructions: prepared_args,
                     },
+                    pathspecs: Vec::new(),
                     user_facing_hint: None,
                 }));
                 self.bottom_pane.drain_pending_submission_state();
@@ -7141,7 +7142,9 @@ impl ChatWidget {
     fn on_entered_review_mode(&mut self, review: ReviewRequest, from_replay: bool) {
         let hint = review
             .user_facing_hint
-            .unwrap_or_else(|| codex_core::review_prompts::user_facing_hint(&review.target));
+            .unwrap_or_else(|| {
+                codex_core::review_prompts::user_facing_hint(&review.target, &review.pathspecs)
+            });
         self.enter_review_mode_with_hint(hint, from_replay);
     }
 
@@ -10608,6 +10611,7 @@ impl ChatWidget {
             actions: vec![Box::new(move |tx: &AppEventSender| {
                 tx.review(ReviewRequest {
                     target: ReviewTarget::UncommittedChanges,
+                    pathspecs: Vec::new(),
                     user_facing_hint: None,
                 });
             })],
@@ -10661,6 +10665,7 @@ impl ChatWidget {
                         target: ReviewTarget::BaseBranch {
                             branch: branch.clone(),
                         },
+                        pathspecs: Vec::new(),
                         user_facing_hint: None,
                     });
                 })],
@@ -10697,6 +10702,7 @@ impl ChatWidget {
                             sha: sha.clone(),
                             title: Some(subject.clone()),
                         },
+                        pathspecs: Vec::new(),
                         user_facing_hint: None,
                     });
                 })],
@@ -10731,6 +10737,7 @@ impl ChatWidget {
                     target: ReviewTarget::Custom {
                         instructions: trimmed,
                     },
+                    pathspecs: Vec::new(),
                     user_facing_hint: None,
                 });
             }),
@@ -11091,6 +11098,7 @@ pub(crate) fn show_review_commit_picker_with_entries(
                         sha: sha.clone(),
                         title: Some(subject.clone()),
                     },
+                    pathspecs: Vec::new(),
                     user_facing_hint: None,
                 });
             })],

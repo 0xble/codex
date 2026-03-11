@@ -79,6 +79,10 @@ pub struct Cli {
     #[arg(long = "output-schema", value_name = "FILE")]
     pub output_schema: Option<PathBuf>,
 
+    /// Start a fresh session with the provided session/thread id (UUID).
+    #[arg(long = "session-id", alias = "thread-id", value_name = "SESSION_ID")]
+    pub session_id: Option<String>,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 
@@ -213,27 +217,27 @@ impl FromArgMatches for ResumeArgs {
 
 #[derive(Parser, Debug)]
 pub struct ReviewArgs {
-    /// Review only staged changes.
-    #[arg(
-        long = "staged",
-        default_value_t = false,
-        conflicts_with_all = ["uncommitted", "base", "commit", "prompt"]
-    )]
-    pub staged: bool,
-
     /// Review staged, unstaged, and untracked changes.
     #[arg(
         long = "uncommitted",
         default_value_t = false,
-        conflicts_with_all = ["staged", "base", "commit", "prompt"]
+        conflicts_with_all = ["staged", "base", "commit", "instructions", "prompt"]
     )]
     pub uncommitted: bool,
+
+    /// Review staged changes only.
+    #[arg(
+        long = "staged",
+        default_value_t = false,
+        conflicts_with_all = ["uncommitted", "base", "commit", "instructions", "prompt"]
+    )]
+    pub staged: bool,
 
     /// Review changes against the given base branch.
     #[arg(
         long = "base",
         value_name = "BRANCH",
-        conflicts_with_all = ["staged", "uncommitted", "commit", "prompt"]
+        conflicts_with_all = ["uncommitted", "staged", "commit", "instructions", "prompt"]
     )]
     pub base: Option<String>,
 
@@ -241,13 +245,47 @@ pub struct ReviewArgs {
     #[arg(
         long = "commit",
         value_name = "SHA",
-        conflicts_with_all = ["staged", "uncommitted", "base", "prompt"]
+        conflicts_with_all = ["uncommitted", "staged", "base", "instructions", "prompt"]
     )]
     pub commit: Option<String>,
 
     /// Optional commit title to display in the review summary.
     #[arg(long = "title", value_name = "TITLE", requires = "commit")]
     pub commit_title: Option<String>,
+
+    /// Restrict review findings to the given repo-relative paths.
+    ///
+    /// You can either repeat the flag (`--paths a --paths b`) or pass
+    /// multiple paths after a single flag (`--paths a b`).
+    ///
+    /// For multi-path custom reviews, prefer `--instructions`; if you use the
+    /// positional prompt instead, separate it with `--`.
+    #[arg(
+        long = "paths",
+        value_name = "PATH",
+        num_args = 1..,
+        action = clap::ArgAction::Append,
+        conflicts_with = "pathspec_from_file"
+    )]
+    pub paths: Vec<String>,
+
+    /// Read review pathspecs from a file, one path per line.
+    #[arg(
+        long = "pathspec-from-file",
+        value_name = "FILE",
+        value_hint = clap::ValueHint::FilePath,
+        conflicts_with = "paths"
+    )]
+    pub pathspec_from_file: Option<PathBuf>,
+
+    /// Custom review instructions, as a flag instead of the positional prompt.
+    #[arg(
+        long = "instructions",
+        value_name = "PROMPT",
+        conflicts_with_all = ["uncommitted", "staged", "base", "commit", "prompt"],
+        value_hint = clap::ValueHint::Other
+    )]
+    pub instructions: Option<String>,
 
     /// Custom review instructions. If `-` is used, read from stdin.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
@@ -266,7 +304,6 @@ pub enum Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -331,5 +368,139 @@ mod tests {
         };
         assert!(args.staged);
         assert!(!args.uncommitted);
+        assert_eq!(args.base, None);
+        assert_eq!(args.commit, None);
+        assert_eq!(args.prompt, None);
+    }
+
+    #[test]
+    fn review_accepts_paths_flag() {
+        let cli = Cli::parse_from([
+            "codex-exec",
+            "review",
+            "--uncommitted",
+            "--paths",
+            "src/lib.rs",
+            "--paths",
+            "src/main.rs",
+        ]);
+
+        let Some(Command::Review(args)) = cli.command else {
+            panic!("expected review command");
+        };
+        assert!(args.uncommitted);
+        assert_eq!(args.paths, vec!["src/lib.rs", "src/main.rs"]);
+        assert_eq!(args.pathspec_from_file, None);
+    }
+
+    #[test]
+    fn review_accepts_multiple_paths_after_single_flag() {
+        let cli = Cli::parse_from([
+            "codex-exec",
+            "review",
+            "--uncommitted",
+            "--paths",
+            "src/lib.rs",
+            "src/main.rs",
+        ]);
+
+        let Some(Command::Review(args)) = cli.command else {
+            panic!("expected review command");
+        };
+        assert!(args.uncommitted);
+        assert_eq!(args.paths, vec!["src/lib.rs", "src/main.rs"]);
+        assert_eq!(args.pathspec_from_file, None);
+    }
+
+    #[test]
+    fn review_accepts_multiple_paths_with_prompt_separator() {
+        let cli = Cli::parse_from([
+            "codex-exec",
+            "review",
+            "--paths",
+            "src/lib.rs",
+            "src/main.rs",
+            "--",
+            "focus on ergonomics",
+        ]);
+
+        let Some(Command::Review(args)) = cli.command else {
+            panic!("expected review command");
+        };
+        assert!(!args.uncommitted);
+        assert_eq!(args.paths, vec!["src/lib.rs", "src/main.rs"]);
+        assert_eq!(args.prompt.as_deref(), Some("focus on ergonomics"));
+    }
+
+    #[test]
+    fn review_accepts_instructions_flag_with_multiple_paths() {
+        let cli = Cli::parse_from([
+            "codex-exec",
+            "review",
+            "--paths",
+            "src/lib.rs",
+            "src/main.rs",
+            "--instructions",
+            "focus on ergonomics",
+        ]);
+
+        let Some(Command::Review(args)) = cli.command else {
+            panic!("expected review command");
+        };
+        assert_eq!(args.paths, vec!["src/lib.rs", "src/main.rs"]);
+        assert_eq!(args.instructions.as_deref(), Some("focus on ergonomics"));
+        assert_eq!(args.prompt, None);
+    }
+
+    #[test]
+    fn review_rejects_instructions_with_uncommitted_target() {
+        let err = Cli::try_parse_from([
+            "codex-exec",
+            "review",
+            "--uncommitted",
+            "--instructions",
+            "focus on ergonomics",
+        ])
+        .expect_err("expected clap to reject mixed review target and instructions");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn review_accepts_pathspec_from_file_flag() {
+        let cli = Cli::parse_from([
+            "codex-exec",
+            "review",
+            "--uncommitted",
+            "--pathspec-from-file",
+            "review-files.txt",
+        ]);
+
+        let Some(Command::Review(args)) = cli.command else {
+            panic!("expected review command");
+        };
+        assert!(args.uncommitted);
+        assert!(args.paths.is_empty());
+        assert_eq!(
+            args.pathspec_from_file,
+            Some(PathBuf::from("review-files.txt"))
+        );
+    }
+
+    #[test]
+    fn parses_requested_session_id_for_fresh_session() {
+        let cli = Cli::parse_from([
+            "codex-exec",
+            "--session-id",
+            "123e4567-e89b-12d3-a456-426614174000",
+            "hello",
+        ]);
+
+        assert_eq!(
+            cli.session_id.as_deref(),
+            Some("123e4567-e89b-12d3-a456-426614174000")
+        );
+        assert_eq!(cli.prompt.as_deref(), Some("hello"));
+        assert!(cli.command.is_none());
     }
 }
