@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use codex_protocol::config_types::WebSearchMode;
@@ -8,12 +9,14 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentMessageDeltaEvent;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::SubAgentSource;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
@@ -38,6 +41,17 @@ impl ReviewTask {
     }
 }
 
+fn review_idle_timeout() -> Duration {
+    if let Some(timeout_ms) = std::env::var("CODEX_REVIEW_IDLE_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        return Duration::from_millis(timeout_ms);
+    }
+
+    Duration::from_secs(90)
+}
+
 #[async_trait]
 impl SessionTask for ReviewTask {
     fn kind(&self) -> TaskKind {
@@ -55,6 +69,7 @@ impl SessionTask for ReviewTask {
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
+        let review_cancellation_token = cancellation_token.child_token();
         let _ = session
             .session
             .services
@@ -66,11 +81,19 @@ impl SessionTask for ReviewTask {
             session.clone(),
             ctx.clone(),
             input,
-            cancellation_token.clone(),
+            review_cancellation_token.clone(),
         )
         .await
         {
-            Some(receiver) => process_review_events(session.clone(), ctx.clone(), receiver).await,
+            Some(receiver) => {
+                process_review_events(
+                    session.clone(),
+                    ctx.clone(),
+                    receiver,
+                    review_cancellation_token,
+                )
+                .await
+            }
             None => None,
         };
         if !cancellation_token.is_cancelled() {
@@ -132,9 +155,36 @@ async fn process_review_events(
     session: Arc<SessionTaskContext>,
     ctx: Arc<TurnContext>,
     receiver: async_channel::Receiver<Event>,
+    review_cancellation_token: CancellationToken,
 ) -> Option<ReviewOutputEvent> {
     let mut prev_agent_message: Option<Event> = None;
-    while let Ok(event) = receiver.recv().await {
+    loop {
+        let event = match timeout(review_idle_timeout(), receiver.recv()).await {
+            Ok(Ok(event)) => event,
+            Ok(Err(_)) => return None,
+            Err(_) => {
+                if review_cancellation_token.is_cancelled() {
+                    return None;
+                }
+
+                review_cancellation_token.cancel();
+                session
+                    .clone_session()
+                    .send_event(
+                        ctx.as_ref(),
+                        EventMsg::Error(ErrorEvent {
+                            message: format!(
+                                "review delegate made no progress for {}; cancelling review",
+                                review_idle_timeout().as_secs_f32()
+                            ),
+                            codex_error_info: None,
+                        }),
+                    )
+                    .await;
+                return None;
+            }
+        };
+
         match event.clone().msg {
             EventMsg::AgentMessage(_) => {
                 if let Some(prev) = prev_agent_message.take() {
@@ -174,8 +224,6 @@ async fn process_review_events(
             }
         }
     }
-    // Channel closed without TurnComplete: treat as interrupted.
-    None
 }
 
 /// Parse a ReviewOutputEvent from a text blob returned by the reviewer model.

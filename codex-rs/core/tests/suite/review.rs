@@ -19,14 +19,18 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::responses::ResponseMock;
+use core_test_support::responses::mount_response_once;
 use core_test_support::responses::mount_sse_sequence;
+use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
+use serial_test::serial;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt as _;
 use uuid::Uuid;
@@ -224,6 +228,72 @@ async fn review_op_with_plain_text_emits_review_fallback() {
     assert_eq!(expected, review);
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
+    let _codex_home_guard = codex_home;
+    server.verify().await;
+}
+
+/// If the review delegate makes no progress for the watchdog interval, surface
+/// an explicit error and close review mode instead of waiting forever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
+async fn review_op_times_out_when_delegate_is_idle() {
+    skip_if_no_network!();
+
+    unsafe {
+        std::env::set_var("CODEX_REVIEW_IDLE_TIMEOUT_MS", "200");
+    }
+
+    let server = start_mock_server().await;
+    let sse_raw = r#"[
+        {"type":"response.completed", "response": {"id": "__ID__"}}
+    ]"#;
+    let sse = load_sse_fixture_with_id_from_str(sse_raw, &Uuid::new_v4().to_string());
+    let _request_log = mount_response_once(
+        &server,
+        sse_response(sse).set_delay(Duration::from_millis(400)),
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "Trigger the review idle watchdog".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
+    let error = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await;
+    let EventMsg::Error(error) = error else {
+        panic!("expected Error(..), got {error:?}");
+    };
+    assert!(
+        error.message.contains("review delegate made no progress"),
+        "expected idle-timeout error, got {:?}",
+        error.message
+    );
+
+    let closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(_))).await;
+    let EventMsg::ExitedReviewMode(closed) = closed else {
+        panic!("expected ExitedReviewMode(..), got {closed:?}");
+    };
+    assert_eq!(
+        None, closed.review_output,
+        "timed-out review should not produce structured output"
+    );
+
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    unsafe {
+        std::env::remove_var("CODEX_REVIEW_IDLE_TIMEOUT_MS");
+    }
     let _codex_home_guard = codex_home;
     server.verify().await;
 }
