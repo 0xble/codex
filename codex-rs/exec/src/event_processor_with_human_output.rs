@@ -1335,6 +1335,8 @@ fn format_mcp_invocation(invocation: &McpInvocation) -> String {
 mod tests {
     use std::path::PathBuf;
 
+    use codex_core::config::ConfigBuilder;
+    use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::HookCompletedEvent;
     use codex_protocol::protocol::HookEventName;
@@ -1345,9 +1347,12 @@ mod tests {
     use codex_protocol::protocol::HookRunSummary;
     use codex_protocol::protocol::HookScope;
     use codex_protocol::protocol::HookStartedEvent;
+    use codex_protocol::protocol::TurnCompleteEvent;
 
     use super::EventProcessorWithHumanOutput;
     use super::should_print_final_message_to_stdout;
+    use crate::event_processor::CodexStatus;
+    use crate::event_processor::EventProcessor;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -1380,6 +1385,24 @@ mod tests {
             should_print_final_message_to_stdout(None, false, false),
             false
         );
+    }
+
+    #[tokio::test]
+    async fn turn_complete_uses_last_agent_message_as_final_output() {
+        let config = ConfigBuilder::default().build().await.expect("test config");
+        let mut processor =
+            EventProcessorWithHumanOutput::create_with_ansi(false, false, &config, None);
+
+        let status = processor.process_event(Event {
+            id: "turn-1".to_string(),
+            msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-1".to_string(),
+                last_agent_message: Some("review summary".to_string()),
+            }),
+        });
+
+        assert!(matches!(status, CodexStatus::InitiateShutdown));
+        assert_eq!(Some("review summary".to_string()), processor.final_message);
     }
 
     #[test]
