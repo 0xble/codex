@@ -677,12 +677,51 @@ impl JsReplManager {
 
         let (stdin, pending_execs, exec_contexts, child, recent_stderr) = {
             let mut kernel = self.kernel.lock().await;
-            if kernel.is_none() {
-                let state = self
-                    .start_kernel(Arc::clone(&turn), Some(session.conversation_id))
-                    .await
-                    .map_err(FunctionCallError::RespondToModel)?;
-                *kernel = Some(state);
+            loop {
+                let stale_kernel = if let Some(state) = kernel.as_ref() {
+                    let mut child = state.child.lock().await;
+                    let pid = child.id();
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            warn!(
+                                kernel_pid = ?pid,
+                                kernel_status = %format_exit_status(status),
+                                "js_repl kernel exited before next exec; restarting"
+                            );
+                            true
+                        }
+                        Ok(None) => false,
+                        Err(err) => {
+                            warn!(
+                                kernel_pid = ?pid,
+                                error = %err,
+                                "failed to inspect js_repl kernel before exec; restarting"
+                            );
+                            true
+                        }
+                    }
+                } else {
+                    false
+                };
+
+                if stale_kernel {
+                    if let Some(state) = kernel.take() {
+                        state.shutdown.cancel();
+                    }
+                    Self::clear_all_exec_tool_calls_map(&self.exec_tool_calls).await;
+                    continue;
+                }
+
+                if kernel.is_none() {
+                    let state = self
+                        .start_kernel(Arc::clone(&turn), Some(session.conversation_id))
+                        .await
+                        .map_err(FunctionCallError::RespondToModel)?;
+                    *kernel = Some(state);
+                    continue;
+                }
+
+                break;
             }
 
             let state = match kernel.as_ref() {
@@ -2330,22 +2369,15 @@ mod tests {
             Arc::clone(&state.child)
         };
         JsReplManager::kill_kernel_child(&child, "test_crash").await;
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                let cleared = {
-                    let guard = manager.kernel.lock().await;
-                    guard
-                        .as_ref()
-                        .is_none_or(|state| !Arc::ptr_eq(&state.child, &child))
-                };
-                if cleared {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("host should clear dead kernel state promptly");
+
+        let exit_state = {
+            let mut child = child.lock().await;
+            child.try_wait()?
+        };
+        assert!(
+            exit_state.is_some(),
+            "forced kernel exit should terminate the previous kernel process"
+        );
 
         let result = manager
             .execute(
@@ -2359,6 +2391,17 @@ mod tests {
             )
             .await?;
         assert!(result.output.contains("after-kill"));
+
+        let restarted_kernel = {
+            let guard = manager.kernel.lock().await;
+            guard
+                .as_ref()
+                .is_some_and(|state| !Arc::ptr_eq(&state.child, &child))
+        };
+        assert!(
+            restarted_kernel,
+            "next exec should replace the dead kernel with a fresh process"
+        );
         Ok(())
     }
 
