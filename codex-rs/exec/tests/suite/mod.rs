@@ -7,5 +7,6 @@ mod mcp_required_exit;
 mod originator;
 mod output_schema;
 mod resume;
+mod review;
 mod sandbox;
 mod server_error_exit;
