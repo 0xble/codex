@@ -565,6 +565,7 @@ fn should_print_final_message_to_tty(
 
 #[cfg(test)]
 mod tests {
+    use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::ThreadItem;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnStatus;
@@ -576,7 +577,7 @@ mod tests {
     use super::should_print_final_message_to_stdout;
     use super::should_print_final_message_to_tty;
     use crate::event_processor::EventProcessor;
-    use codex_app_server_protocol::ServerNotification;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn suppresses_final_stdout_message_when_both_streams_are_terminals() {
@@ -651,7 +652,6 @@ mod tests {
             &["raw".to_string()],
             /*show_raw_agent_reasoning*/ true,
         );
-
         assert_eq!(text.as_deref(), Some("raw"));
     }
 
