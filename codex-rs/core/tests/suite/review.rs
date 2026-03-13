@@ -19,14 +19,18 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::responses::ResponseMock;
+use core_test_support::responses::mount_response_once;
 use core_test_support::responses::mount_sse_sequence;
+use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt as _;
 use uuid::Uuid;
@@ -114,7 +118,15 @@ async fn review_op_emits_lifecycle_and_review_output() {
         overall_confidence_score: 0.8,
     };
     assert_eq!(expected, review);
-    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    let complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    let expected_assistant_text = render_review_output_text(&expected);
+    let EventMsg::TurnComplete(complete) = complete else {
+        panic!("expected TurnComplete(..), got {complete:?}");
+    };
+    assert_eq!(
+        Some(expected_assistant_text.clone()),
+        complete.last_agent_message
+    );
 
     // Also verify that a user message with the header and a formatted finding
     // was recorded back in the parent session's rollout.
@@ -123,7 +135,6 @@ async fn review_op_emits_lifecycle_and_review_output() {
 
     let mut saw_header = false;
     let mut saw_finding_line = false;
-    let expected_assistant_text = render_review_output_text(&expected);
     let mut saw_assistant_plain = false;
     let mut saw_assistant_xml = false;
     for line in text.lines() {
@@ -224,7 +235,82 @@ async fn review_op_with_plain_text_emits_review_fallback() {
         ..Default::default()
     };
     assert_eq!(expected, review);
-    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    let complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    let expected_assistant_text = render_review_output_text(&expected);
+    let EventMsg::TurnComplete(complete) = complete else {
+        panic!("expected TurnComplete(..), got {complete:?}");
+    };
+    assert_eq!(Some(expected_assistant_text), complete.last_agent_message);
+
+    let _codex_home_guard = codex_home;
+    server.verify().await;
+}
+
+/// If the review delegate makes no progress for the watchdog interval, surface
+/// an explicit timeout message and preserve it in TurnComplete.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(review_timeout_env)]
+async fn review_op_times_out_when_delegate_is_idle() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let sse_raw = r#"[
+        {"type":"response.completed", "response": {"id": "__ID__"}}
+    ]"#;
+    let sse = load_sse_fixture_with_id_from_str(sse_raw, &Uuid::new_v4().to_string());
+    let _request_log = mount_response_once(
+        &server,
+        sse_response(sse).set_delay(Duration::from_millis(400)),
+    )
+    .await;
+
+    let _timeout_guard = EnvGuard::set("CODEX_REVIEW_IDLE_TIMEOUT_MS", "50".to_string());
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "Trigger the review idle watchdog".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
+    let error = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await;
+    let EventMsg::Error(error) = error else {
+        panic!("expected Error(..), got {error:?}");
+    };
+    assert!(
+        error.message.contains("review delegate made no progress"),
+        "expected idle-timeout error, got {:?}",
+        error.message
+    );
+
+    let closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(_))).await;
+    let EventMsg::ExitedReviewMode(closed) = closed else {
+        panic!("expected ExitedReviewMode(..), got {closed:?}");
+    };
+    assert_eq!(
+        None, closed.review_output,
+        "timed-out review should not produce structured output"
+    );
+
+    let complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    let EventMsg::TurnComplete(complete) = complete else {
+        panic!("expected TurnComplete(..), got {complete:?}");
+    };
+    assert_eq!(
+        Some(
+            "Review timed out waiting for reviewer progress. Please narrow the review scope and try again."
+                .to_string()
+        ),
+        complete.last_agent_message
+    );
 
     let _codex_home_guard = codex_home;
     server.verify().await;
@@ -893,6 +979,34 @@ async fn start_responses_server_with_sse(
     let responses = vec![sse; expected_requests];
     let request_log = mount_sse_sequence(&server, responses).await;
     (server, request_log)
+}
+
+struct EnvGuard {
+    key: &'static str,
+    original: Option<OsString>,
+}
+
+impl EnvGuard {
+    fn set(key: &'static str, value: String) -> Self {
+        let original = std::env::var_os(key);
+        // SAFETY: these tests execute serially, so updating the process environment is safe.
+        unsafe {
+            std::env::set_var(key, &value);
+        }
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        // SAFETY: the guard restores the original environment value before other tests run.
+        unsafe {
+            match &self.original {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
 }
 
 /// Create a conversation configured to talk to the provided mock server.
