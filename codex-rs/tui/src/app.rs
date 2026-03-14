@@ -685,6 +685,9 @@ fn compute_title_context(
     let idle_identity = normalize_title_segment(thread_name.clone())
         .or_else(|| normalize_title_segment(persisted_thread_name))
         .or_else(|| normalize_title_segment(work_hint.clone()));
+    if task_running && focus == Some(TerminalTitleFocus::RequestUserInput) {
+        return Some(format!("? {DEFAULT_TITLE_IDENTITY}"));
+    }
     let status = normalize_title_segment(status_header)
         .filter(|status| !status.eq_ignore_ascii_case("working"));
     if !task_running {
@@ -4466,6 +4469,23 @@ mod tests {
                 0,
             ),
             Some("⠋ Permissions".to_string())
+        );
+    }
+
+    #[test]
+    fn title_context_uses_question_mark_for_request_user_input() {
+        assert_eq!(
+            compute_title_context(
+                Some("thread name".to_string()),
+                Some("persisted title".to_string()),
+                Some("draft focus".to_string()),
+                Some("Need input".to_string()),
+                Some(TerminalTitleFocus::RequestUserInput),
+                true,
+                true,
+                0,
+            ),
+            Some("? Codex".to_string())
         );
     }
 
