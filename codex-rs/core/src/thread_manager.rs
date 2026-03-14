@@ -36,6 +36,10 @@ use codex_protocol::protocol::W3cTraceContext;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -124,6 +128,34 @@ pub struct NewThread {
     pub session_configured: SessionConfiguredEvent,
 }
 
+pub(crate) struct RequestedThreadIdLease {
+    _file: File,
+}
+
+fn acquire_requested_thread_id_lease(
+    codex_home: &Path,
+    thread_id: &ThreadId,
+) -> CodexResult<RequestedThreadIdLease> {
+    let lock_dir = codex_home.join("thread-start-locks");
+    std::fs::create_dir_all(&lock_dir)?;
+
+    let lock_path = lock_dir.join(format!("{thread_id}.lock"));
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)?;
+
+    match file.try_lock() {
+        Ok(()) => Ok(RequestedThreadIdLease { _file: file }),
+        Err(std::fs::TryLockError::WouldBlock) => Err(CodexErr::InvalidRequest(format!(
+            "thread already exists: {thread_id}"
+        ))),
+        Err(std::fs::TryLockError::Error(err)) => Err(err.into()),
+    }
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ThreadShutdownReport {
     pub completed: Vec<ThreadId>,
@@ -149,6 +181,7 @@ pub struct ThreadManager {
 /// function to require an `Arc<&Self>`.
 pub(crate) struct ThreadManagerState {
     threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
+    reserved_thread_ids: Arc<RwLock<HashSet<ThreadId>>>,
     thread_created_tx: broadcast::Sender<ThreadId>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
@@ -186,6 +219,7 @@ impl ThreadManager {
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
+                reserved_thread_ids: Arc::new(RwLock::new(HashSet::new())),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::new_with_provider(
                     codex_home,
@@ -247,6 +281,7 @@ impl ThreadManager {
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
+                reserved_thread_ids: Arc::new(RwLock::new(HashSet::new())),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::with_provider_for_tests(
                     codex_home,
@@ -355,6 +390,7 @@ impl ThreadManager {
             persist_extended_history,
             None,
             None,
+            None,
         ))
         .await
     }
@@ -365,9 +401,27 @@ impl ThreadManager {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
+        requested_thread_id: Option<ThreadId>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
-        Box::pin(self.state.spawn_thread(
+        if let Some(thread_id) = requested_thread_id {
+            self.state.reserve_requested_thread_id(thread_id).await?;
+        }
+
+        let requested_thread_id_lease = match requested_thread_id.as_ref() {
+            Some(thread_id) => {
+                match acquire_requested_thread_id_lease(&config.codex_home, thread_id) {
+                    Ok(lease) => Some(lease),
+                    Err(err) => {
+                        self.state.release_requested_thread_id(*thread_id).await;
+                        return Err(err);
+                    }
+                }
+            }
+            None => None,
+        };
+
+        let result = Box::pin(self.state.spawn_thread(
             config,
             InitialHistory::New,
             Arc::clone(&self.state.auth_manager),
@@ -375,9 +429,17 @@ impl ThreadManager {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
+            requested_thread_id,
+            requested_thread_id_lease,
             parent_trace,
         ))
-        .await
+        .await;
+
+        if let Some(thread_id) = requested_thread_id {
+            self.state.release_requested_thread_id(thread_id).await;
+        }
+
+        result
     }
 
     pub async fn resume_thread_from_rollout(
@@ -413,6 +475,8 @@ impl ThreadManager {
             self.agent_control(),
             Vec::new(),
             persist_extended_history,
+            None,
+            None,
             None,
             parent_trace,
         ))
@@ -499,6 +563,8 @@ impl ThreadManager {
             Vec::new(),
             persist_extended_history,
             None,
+            None,
+            None,
             parent_trace,
         ))
         .await
@@ -519,6 +585,28 @@ impl ThreadManager {
 }
 
 impl ThreadManagerState {
+    async fn reserve_requested_thread_id(&self, thread_id: ThreadId) -> CodexResult<()> {
+        let threads = self.threads.write().await;
+        if threads.contains_key(&thread_id) {
+            return Err(CodexErr::InvalidRequest(format!(
+                "thread already exists: {thread_id}"
+            )));
+        }
+
+        let mut reserved_thread_ids = self.reserved_thread_ids.write().await;
+        if !reserved_thread_ids.insert(thread_id) {
+            return Err(CodexErr::InvalidRequest(format!(
+                "thread already exists: {thread_id}"
+            )));
+        }
+
+        Ok(())
+    }
+
+    async fn release_requested_thread_id(&self, thread_id: ThreadId) {
+        self.reserved_thread_ids.write().await.remove(&thread_id);
+    }
+
     pub(crate) async fn list_thread_ids(&self) -> Vec<ThreadId> {
         self.threads.read().await.keys().copied().collect()
     }
@@ -583,6 +671,8 @@ impl ThreadManagerState {
             Vec::new(),
             persist_extended_history,
             metrics_service_name,
+            None,
+            None,
             inherited_shell_snapshot,
             None,
         ))
@@ -606,6 +696,8 @@ impl ThreadManagerState {
             session_source,
             Vec::new(),
             false,
+            None,
+            None,
             None,
             inherited_shell_snapshot,
             None,
@@ -631,6 +723,8 @@ impl ThreadManagerState {
             Vec::new(),
             persist_extended_history,
             None,
+            None,
+            None,
             inherited_shell_snapshot,
             None,
         ))
@@ -648,6 +742,8 @@ impl ThreadManagerState {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
+        requested_thread_id: Option<ThreadId>,
+        requested_thread_id_lease: Option<RequestedThreadIdLease>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
@@ -659,6 +755,8 @@ impl ThreadManagerState {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
+            requested_thread_id,
+            requested_thread_id_lease,
             None,
             parent_trace,
         ))
@@ -676,6 +774,8 @@ impl ThreadManagerState {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
+        requested_thread_id: Option<ThreadId>,
+        requested_thread_id_lease: Option<RequestedThreadIdLease>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
@@ -698,6 +798,8 @@ impl ThreadManagerState {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
+            requested_thread_id,
+            requested_thread_id_lease,
             inherited_shell_snapshot,
             parent_trace,
         })

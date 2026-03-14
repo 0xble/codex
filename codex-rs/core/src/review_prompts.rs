@@ -1,12 +1,13 @@
 use codex_git::merge_base_with_head;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
+use std::collections::HashSet;
 use std::path::Path;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedReviewRequest {
     pub target: ReviewTarget,
-    pub pathspecs: Option<Vec<String>>,
+    pub pathspecs: Vec<String>,
     pub prompt: String,
     pub user_facing_hint: String,
 }
@@ -28,11 +29,12 @@ pub fn resolve_review_request(
     cwd: &Path,
 ) -> anyhow::Result<ResolvedReviewRequest> {
     let target = request.target;
-    let pathspecs = request.pathspecs;
-    let prompt = review_prompt(&target, pathspecs.as_deref(), cwd)?;
+    let pathspecs = normalize_hint_pathspecs(&request.pathspecs)?;
+    let pathspec_scope = (!pathspecs.is_empty()).then_some(pathspecs.as_slice());
+    let prompt = review_prompt(&target, pathspec_scope, cwd)?;
     let user_facing_hint = request
         .user_facing_hint
-        .unwrap_or_else(|| user_facing_hint(&target, pathspecs.as_deref()));
+        .unwrap_or_else(|| user_facing_hint(&target, pathspec_scope));
 
     Ok(ResolvedReviewRequest {
         target,
@@ -163,6 +165,31 @@ pub fn user_facing_hint(target: &ReviewTarget, pathspecs: Option<&[String]>) -> 
         Some(path_scope) => format!("{base} in {path_scope}"),
         None => base,
     }
+}
+
+pub fn user_facing_hint_for_request(request: &ReviewRequest) -> anyhow::Result<String> {
+    let pathspecs = normalize_hint_pathspecs(&request.pathspecs)?;
+    Ok(user_facing_hint(
+        &request.target,
+        (!pathspecs.is_empty()).then_some(pathspecs.as_slice()),
+    ))
+}
+
+fn normalize_hint_pathspecs(pathspecs: &[String]) -> anyhow::Result<Vec<String>> {
+    let mut normalized = Vec::with_capacity(pathspecs.len());
+    let mut seen = HashSet::new();
+
+    for raw in pathspecs {
+        if raw.trim().is_empty() {
+            anyhow::bail!("Review pathspecs must not be empty");
+        }
+        let normalized_pathspec = normalize_repo_relative_pathspec(raw);
+        if seen.insert(normalized_pathspec.clone()) {
+            normalized.push(normalized_pathspec);
+        }
+    }
+
+    Ok(normalized)
 }
 
 pub fn normalize_repo_relative_pathspec(pathspec: &str) -> String {
@@ -495,7 +522,7 @@ mod tests {
     fn preserve_pathspecs_when_resolving_review_request() {
         let request = ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
-            pathspecs: Some(vec!["src/lib.rs".to_string()]),
+            pathspecs: vec!["src/lib.rs".to_string()],
             user_facing_hint: None,
         };
 
@@ -504,11 +531,24 @@ mod tests {
         let round_trip: ReviewRequest = resolved.into();
         let expected = ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
-            pathspecs: Some(vec!["src/lib.rs".to_string()]),
+            pathspecs: vec!["src/lib.rs".to_string()],
             user_facing_hint: Some("current changes in src/lib.rs".to_string()),
         };
 
         assert_eq!(round_trip, expected);
+    }
+
+    #[test]
+    fn preserve_surrounding_whitespace_in_pathspecs() {
+        let request = ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            pathspecs: vec!["  weird file.rs  ".to_string()],
+            user_facing_hint: None,
+        };
+
+        let resolved = resolve_review_request(request, Path::new(".")).expect("resolve request");
+
+        assert_eq!(resolved.pathspecs, vec!["  weird file.rs  ".to_string()]);
     }
 
     fn run_git(cwd: &Path, args: &[&str]) {

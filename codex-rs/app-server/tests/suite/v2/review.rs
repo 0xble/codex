@@ -27,6 +27,8 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::path::Path;
+use std::process::Command;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -67,10 +69,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         .send_review_start_request(ReviewStartParams {
             thread_id: thread_id.clone(),
             delivery: Some(ReviewDelivery::Inline),
-            pathspecs: Some(vec![
-                "./src/lib.rs".to_string(),
-                "././src/main.rs".to_string(),
-            ]),
+            pathspecs: vec!["./src/lib.rs".to_string(), "././src/main.rs".to_string()],
             target: ReviewTarget::Commit {
                 sha: "1234567deadbeef".to_string(),
                 title: Some("Tidy UI colors".to_string()),
@@ -158,18 +157,24 @@ async fn review_start_accepts_staged_target_and_emits_staged_banner() -> Result<
     let server = create_mock_responses_server_repeating_assistant(&review_payload).await;
 
     let codex_home = TempDir::new()?;
+    let repo = create_git_repo()?;
     create_config_toml(codex_home.path(), &server.uri())?;
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn alpha() { println!(\"hi\"); }\n",
+    )?;
+    run_git(repo.path(), &["add", "src/lib.rs"])?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let thread_id = start_default_thread(&mut mcp).await?;
+    let thread_id = start_thread_in_cwd(&mut mcp, repo.path()).await?;
 
     let review_req = mcp
         .send_review_start_request(ReviewStartParams {
             thread_id: thread_id.clone(),
             delivery: Some(ReviewDelivery::Inline),
-            pathspecs: None,
+            pathspecs: Vec::new(),
             target: ReviewTarget::StagedChanges,
         })
         .await?;
@@ -241,7 +246,7 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
         .send_review_start_request(ReviewStartParams {
             thread_id,
             delivery: Some(ReviewDelivery::Inline),
-            pathspecs: None,
+            pathspecs: Vec::new(),
             target: ReviewTarget::Commit {
                 sha: "1234567deadbeef".to_string(),
                 title: Some("Check review approvals".to_string()),
@@ -312,7 +317,7 @@ async fn review_start_rejects_empty_base_branch() -> Result<()> {
         .send_review_start_request(ReviewStartParams {
             thread_id,
             delivery: Some(ReviewDelivery::Inline),
-            pathspecs: None,
+            pathspecs: Vec::new(),
             target: ReviewTarget::BaseBranch {
                 branch: "   ".to_string(),
             },
@@ -358,7 +363,7 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
         .send_review_start_request(ReviewStartParams {
             thread_id: thread_id.clone(),
             delivery: Some(ReviewDelivery::Detached),
-            pathspecs: None,
+            pathspecs: Vec::new(),
             target: ReviewTarget::Custom {
                 instructions: "detached review".to_string(),
             },
@@ -422,7 +427,7 @@ async fn review_start_rejects_empty_commit_sha() -> Result<()> {
         .send_review_start_request(ReviewStartParams {
             thread_id,
             delivery: Some(ReviewDelivery::Inline),
-            pathspecs: None,
+            pathspecs: Vec::new(),
             target: ReviewTarget::Commit {
                 sha: "\t".to_string(),
                 title: None,
@@ -458,7 +463,7 @@ async fn review_start_rejects_empty_custom_instructions() -> Result<()> {
         .send_review_start_request(ReviewStartParams {
             thread_id,
             delivery: Some(ReviewDelivery::Inline),
-            pathspecs: None,
+            pathspecs: Vec::new(),
             target: ReviewTarget::Custom {
                 instructions: "\n\n".to_string(),
             },
@@ -496,7 +501,7 @@ async fn review_start_rejects_empty_pathspecs() -> Result<()> {
         .send_review_start_request(ReviewStartParams {
             thread_id,
             delivery: Some(ReviewDelivery::Inline),
-            pathspecs: Some(vec!["   ".to_string()]),
+            pathspecs: vec!["   ".to_string()],
             target: ReviewTarget::UncommittedChanges,
         })
         .await?;
@@ -510,7 +515,7 @@ async fn review_start_rejects_empty_pathspecs() -> Result<()> {
         error
             .error
             .message
-            .contains("pathspecs must include at least one non-empty path"),
+            .contains("Review pathspecs must not be empty"),
         "unexpected message: {}",
         error.error.message
     );
@@ -519,9 +524,15 @@ async fn review_start_rejects_empty_pathspecs() -> Result<()> {
 }
 
 async fn start_default_thread(mcp: &mut McpProcess) -> Result<String> {
+    let cwd = std::env::current_dir()?;
+    start_thread_in_cwd(mcp, cwd.as_path()).await
+}
+
+async fn start_thread_in_cwd(mcp: &mut McpProcess, cwd: &Path) -> Result<String> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            cwd: Some(cwd.to_string_lossy().into_owned()),
             ..Default::default()
         })
         .await?;
@@ -537,6 +548,33 @@ async fn start_default_thread(mcp: &mut McpProcess) -> Result<String> {
     )
     .await??;
     Ok(thread.id)
+}
+
+fn create_git_repo() -> Result<TempDir> {
+    let repo = TempDir::new()?;
+    run_git(repo.path(), &["init", "-b", "main"])?;
+    run_git(repo.path(), &["config", "user.email", "test@example.com"])?;
+    run_git(repo.path(), &["config", "user.name", "Test User"])?;
+
+    std::fs::create_dir_all(repo.path().join("src"))?;
+    std::fs::write(repo.path().join("src/lib.rs"), "pub fn alpha() {}\n")?;
+    std::fs::write(repo.path().join("src/main.rs"), "fn main() {}\n")?;
+    run_git(repo.path(), &["add", "src/lib.rs", "src/main.rs"])?;
+    run_git(repo.path(), &["commit", "-m", "initial"])?;
+
+    Ok(repo)
+}
+
+fn run_git(repo: &Path, args: &[&str]) -> Result<()> {
+    let output = Command::new("git").current_dir(repo).args(args).output()?;
+    anyhow::ensure!(
+        output.status.success(),
+        "git {:?} failed: stdout={} stderr={}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
 }
 
 async fn materialize_thread_rollout(mcp: &mut McpProcess, thread_id: &str) -> Result<()> {

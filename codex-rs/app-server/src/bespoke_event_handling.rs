@@ -1359,8 +1359,13 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::EnteredReviewMode(review_request) => {
             let review = review_request.user_facing_hint.clone().unwrap_or_else(|| {
-                review_prompts::user_facing_hint_for_request(&review_request)
-                    .unwrap_or_else(|_| review_prompts::user_facing_hint(&review_request.target))
+                review_prompts::user_facing_hint_for_request(&review_request).unwrap_or_else(|_| {
+                    review_prompts::user_facing_hint(
+                        &review_request.target,
+                        (!review_request.pathspecs.is_empty())
+                            .then_some(review_request.pathspecs.as_slice()),
+                    )
+                })
             });
             let item = ThreadItem::EnteredReviewMode {
                 id: event_turn_id.clone(),

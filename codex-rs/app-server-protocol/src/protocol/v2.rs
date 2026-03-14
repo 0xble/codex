@@ -2486,6 +2486,8 @@ pub struct ThreadStartParams {
     pub model: Option<String>,
     #[ts(optional = nullable)]
     pub model_provider: Option<String>,
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_double_option",

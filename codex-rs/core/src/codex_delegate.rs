@@ -87,6 +87,8 @@ pub(crate) async fn run_codex_thread_interactive(
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         metrics_service_name: None,
+        requested_thread_id: None,
+        requested_thread_id_lease: None,
         inherited_shell_snapshot: None,
         parent_trace: None,
     })

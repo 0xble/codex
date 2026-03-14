@@ -59,7 +59,6 @@ use chrono::Local;
 use chrono::Utc;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
-use codex_git::StagedReviewSnapshot;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
@@ -290,6 +289,7 @@ use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
+use crate::thread_manager::RequestedThreadIdLease;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::discoverable::DiscoverableTool;
@@ -370,6 +370,8 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) persist_extended_history: bool,
     pub(crate) metrics_service_name: Option<String>,
+    pub(crate) requested_thread_id: Option<ThreadId>,
+    pub(crate) requested_thread_id_lease: Option<RequestedThreadIdLease>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
 }
@@ -420,6 +422,8 @@ impl Codex {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
+            requested_thread_id,
+            requested_thread_id_lease,
             inherited_shell_snapshot,
             parent_trace: _,
         } = args;
@@ -596,6 +600,8 @@ impl Codex {
             mcp_manager.clone(),
             file_watcher,
             agent_control,
+            requested_thread_id,
+            requested_thread_id_lease,
         )
         .await
         .map_err(|e| {
@@ -1378,6 +1384,8 @@ impl Session {
         mcp_manager: Arc<McpManager>,
         file_watcher: Arc<FileWatcher>,
         agent_control: AgentControl,
+        requested_thread_id: Option<ThreadId>,
+        requested_thread_id_lease: Option<RequestedThreadIdLease>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -1394,7 +1402,27 @@ impl Session {
         let forked_from_id = initial_history.forked_from_id();
 
         let (conversation_id, rollout_params) = match &initial_history {
-            InitialHistory::New | InitialHistory::Forked(_) => {
+            InitialHistory::New => {
+                let conversation_id = requested_thread_id.unwrap_or_default();
+                (
+                    conversation_id,
+                    RolloutRecorderParams::new(
+                        conversation_id,
+                        forked_from_id,
+                        session_source,
+                        BaseInstructions {
+                            text: session_configuration.base_instructions.clone(),
+                        },
+                        session_configuration.dynamic_tools.clone(),
+                        if session_configuration.persist_extended_history {
+                            EventPersistenceMode::Extended
+                        } else {
+                            EventPersistenceMode::Limited
+                        },
+                    ),
+                )
+            }
+            InitialHistory::Forked(_) => {
                 let conversation_id = ThreadId::default();
                 (
                     conversation_id,
@@ -1761,6 +1789,7 @@ impl Session {
             ),
             hooks,
             rollout: Mutex::new(rollout_recorder),
+            requested_thread_id_lease: Mutex::new(requested_thread_id_lease),
             user_shell: Arc::new(default_shell),
             shell_snapshot_tx,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -1975,10 +2004,14 @@ impl Session {
             let guard = self.services.rollout.lock().await;
             guard.clone()
         };
-        if let Some(rec) = recorder
-            && let Err(e) = rec.persist().await
-        {
-            warn!("failed to materialize rollout recorder: {e}");
+        if let Some(rec) = recorder {
+            match rec.persist().await {
+                Ok(()) => {
+                    let mut lease = self.services.requested_thread_id_lease.lock().await;
+                    *lease = None;
+                }
+                Err(e) => warn!("failed to materialize rollout recorder: {e}"),
+            }
         }
     }
 
@@ -4416,7 +4449,6 @@ mod handlers {
     use codex_protocol::protocol::RemoteSkillSummary;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
-    use codex_protocol::protocol::ReviewTarget;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::SkillsListEntry;
     use codex_protocol::protocol::ThreadNameUpdatedEvent;
@@ -4427,7 +4459,6 @@ mod handlers {
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
     use crate::context_manager::is_user_turn_boundary;
-    use codex_git::StagedReviewSnapshot;
     use codex_protocol::config_types::CollaborationMode;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
@@ -5212,31 +5243,12 @@ mod handlers {
         sess.refresh_mcp_servers_if_requested(&turn_context).await;
         match resolve_review_request(review_request, turn_context.cwd.as_path()) {
             Ok(resolved) => {
-                let staged_snapshot = if matches!(resolved.target, ReviewTarget::StagedChanges) {
-                    match StagedReviewSnapshot::new(turn_context.cwd.as_path()) {
-                        Ok(snapshot) => Some(Arc::new(snapshot)),
-                        Err(err) => {
-                            let event = Event {
-                                id: sub_id,
-                                msg: EventMsg::Error(ErrorEvent {
-                                    message: err.to_string(),
-                                    codex_error_info: Some(CodexErrorInfo::Other),
-                                }),
-                            };
-                            sess.send_event(&turn_context, event.msg).await;
-                            return;
-                        }
-                    }
-                } else {
-                    None
-                };
                 spawn_review_thread(
                     Arc::clone(sess),
                     Arc::clone(config),
                     turn_context.clone(),
                     sub_id,
                     resolved,
-                    staged_snapshot,
                 )
                 .await;
             }
@@ -5261,7 +5273,6 @@ async fn spawn_review_thread(
     parent_turn_context: Arc<TurnContext>,
     sub_id: String,
     resolved: crate::review_prompts::ResolvedReviewRequest,
-    staged_snapshot: Option<Arc<StagedReviewSnapshot>>,
 ) {
     let model = config
         .review_model
@@ -5300,6 +5311,7 @@ async fn spawn_review_thread(
     .with_agent_roles(config.agent_roles.clone());
 
     let review_prompt = resolved.prompt.clone();
+    let review_request: ReviewRequest = resolved.clone().into();
     let provider = parent_turn_context.provider.clone();
     let auth_manager = parent_turn_context.auth_manager.clone();
     let model_info = review_model_info.clone();
@@ -5330,12 +5342,6 @@ async fn spawn_review_thread(
         .model_reasoning_summary
         .unwrap_or(model_info.default_reasoning_summary);
     let session_source = parent_turn_context.session_source.clone();
-    let review_cwd = staged_snapshot
-        .as_ref()
-        .map(|snapshot| snapshot.cwd().to_path_buf())
-        .unwrap_or_else(|| parent_turn_context.cwd.clone());
-
-    per_turn_config.cwd = review_cwd.clone();
 
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
@@ -5376,7 +5382,7 @@ async fn spawn_review_thread(
         network: parent_turn_context.network.clone(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
-        cwd: review_cwd,
+        cwd: parent_turn_context.cwd.clone(),
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
@@ -5399,15 +5405,10 @@ async fn spawn_review_thread(
     // TODO(ccunningham): Review turns currently rely on `spawn_task` for TurnComplete but do not
     // emit a parent TurnStarted. Consider giving review a full parent turn lifecycle
     // (TurnStarted + TurnComplete) for consistency with other standalone tasks.
-    sess.spawn_task(tc.clone(), input, ReviewTask::new(staged_snapshot))
+    sess.spawn_task(tc.clone(), input, ReviewTask::new(None))
         .await;
 
     // Announce entering review mode so UIs can switch modes.
-    let review_request = ReviewRequest {
-        target: resolved.target,
-        pathspecs: resolved.pathspecs,
-        user_facing_hint: Some(resolved.user_facing_hint),
-    };
     sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
         .await;
 }

@@ -98,7 +98,6 @@ use uuid::Uuid;
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
-use crate::event_processor::ReviewLifecycleStatus;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
 use codex_core::find_thread_path_by_id_str;
@@ -114,6 +113,13 @@ enum InitialOperation {
     Review {
         review_request: ReviewRequest,
     },
+}
+
+#[cfg(test)]
+enum ReviewLifecycleStatus<'a> {
+    Finished(&'a codex_protocol::protocol::ReviewOutputEvent),
+    EndedWithoutOutput,
+    Interrupted,
 }
 
 struct RequestIdSequencer {
@@ -551,45 +557,34 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         })?;
 
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.
-    let (primary_thread_id, fallback_session_configured) =
-        if let Some(ExecCommand::Resume(args)) = command.as_ref() {
-            let resume_path = resolve_resume_path(&config, args).await?;
+    let (primary_thread_id, fallback_session_configured) = if let Some(ExecCommand::Resume(args)) =
+        command.as_ref()
+    {
+        let resume_path = resolve_resume_path(&config, args).await?;
 
-            if let Some(path) = resume_path {
-                let response: ThreadResumeResponse = send_request_with_response(
-                    &client,
-                    ClientRequest::ThreadResume {
-                        request_id: request_ids.next(),
-                        params: thread_resume_params_from_config(&config, Some(path)),
-                    },
-                    "thread/resume",
-                )
-                .await
+        if let Some(path) = resume_path {
+            let response: ThreadResumeResponse = send_request_with_response(
+                &client,
+                ClientRequest::ThreadResume {
+                    request_id: request_ids.next(),
+                    params: thread_resume_params_from_config(&config, Some(path)),
+                },
+                "thread/resume",
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
+            let session_configured = session_configured_from_thread_resume_response(&response)
                 .map_err(anyhow::Error::msg)?;
-                let session_configured = session_configured_from_thread_resume_response(&response)
-                    .map_err(anyhow::Error::msg)?;
-                (session_configured.session_id, session_configured)
-            } else {
-                let response: ThreadStartResponse = send_request_with_response(
-                    &client,
-                    ClientRequest::ThreadStart {
-                        request_id: request_ids.next(),
-                        params: thread_start_params_from_config(&config, session_id.clone()),
-                    },
-                    "thread/start",
-                )
-                .await
-                .map_err(anyhow::Error::msg)?;
-                let session_configured = session_configured_from_thread_start_response(&response)
-                    .map_err(anyhow::Error::msg)?;
-                (session_configured.session_id, session_configured)
-            }
+            (session_configured.session_id, session_configured)
         } else {
             let response: ThreadStartResponse = send_request_with_response(
                 &client,
                 ClientRequest::ThreadStart {
                     request_id: request_ids.next(),
-                    params: thread_start_params_from_config(&config, session_id.clone()),
+                    params: thread_start_params_from_config(
+                        &config,
+                        requested_thread_id_for_thread_start(command.as_ref(), session_id.clone()),
+                    ),
                 },
                 "thread/start",
             )
@@ -598,7 +593,25 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             let session_configured = session_configured_from_thread_start_response(&response)
                 .map_err(anyhow::Error::msg)?;
             (session_configured.session_id, session_configured)
-        };
+        }
+    } else {
+        let response: ThreadStartResponse = send_request_with_response(
+            &client,
+            ClientRequest::ThreadStart {
+                request_id: request_ids.next(),
+                params: thread_start_params_from_config(
+                    &config,
+                    requested_thread_id_for_thread_start(command.as_ref(), session_id.clone()),
+                ),
+            },
+            "thread/start",
+        )
+        .await
+        .map_err(anyhow::Error::msg)?;
+        let session_configured =
+            session_configured_from_thread_start_response(&response).map_err(anyhow::Error::msg)?;
+        (session_configured.session_id, session_configured)
+    };
 
     let primary_thread_id_for_span = primary_thread_id.to_string();
     let mut buffered_events = VecDeque::new();
@@ -612,10 +625,8 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
         (Some(ExecCommand::Review(review_cli)), _, _) => {
             let review_request = build_review_request(review_cli)?;
-            let summary = codex_core::review_prompts::user_facing_hint(
-                &review_request.target,
-                review_request.pathspecs.as_deref(),
-            );
+            let summary =
+                codex_core::review_prompts::user_facing_hint_for_request(&review_request)?;
             (InitialOperation::Review { review_request }, summary)
         }
         (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
@@ -675,8 +686,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     // Print the effective configuration and initial request so users can see what Codex
     // is using.
     event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
-    let review_summary = matches!(&initial_operation, InitialOperation::Review { .. })
-        .then_some(prompt_summary.clone());
 
     info!("Codex initialized with event: {session_configured:?}");
 
@@ -737,9 +746,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             )
             .await
             .map_err(anyhow::Error::msg)?;
-            if let Some(summary) = review_summary.as_deref() {
-                event_processor.print_review_started(summary);
-            }
             let task_id = response.turn.id;
             info!("Sent review request with event ID: {task_id}");
             task_id
@@ -752,7 +758,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
     let mut interrupt_channel_open = true;
-    let mut review_status_reported = false;
     let primary_thread_id_for_requests = primary_thread_id.to_string();
     loop {
         let server_event = if let Some(event) = buffered_events.pop_front() {
@@ -869,40 +874,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     _ => {}
                 }
 
-                if review_summary.is_some() && !review_status_reported {
-                    match &event.msg {
-                        EventMsg::ExitedReviewMode(payload) => {
-                            if let Some(status) = review_status_for_exit_payload(payload) {
-                                event_processor.print_review_status(status);
-                                review_status_reported = true;
-                            }
-                        }
-                        EventMsg::TurnComplete(payload) if payload.turn_id == task_id => {
-                            let review_output = payload
-                                .last_agent_message
-                                .as_deref()
-                                .and_then(try_parse_review_output_event);
-                            if let Some(output) = review_output.as_ref() {
-                                event_processor
-                                    .print_review_status(ReviewLifecycleStatus::Finished(output));
-                            } else {
-                                event_processor
-                                    .print_review_status(ReviewLifecycleStatus::EndedWithoutOutput);
-                            }
-                            review_status_reported = true;
-                        }
-                        EventMsg::TurnAborted(payload)
-                            if payload.turn_id.as_deref() == Some(task_id.as_str()) =>
-                        {
-                            event_processor.print_review_status(review_status_for_abort_reason(
-                                &payload.reason,
-                            ));
-                            review_status_reported = true;
-                        }
-                        _ => {}
-                    }
-                }
-
                 match event_processor.process_event(event) {
                     CodexStatus::Running => {}
                     CodexStatus::InitiateShutdown => {
@@ -978,6 +949,16 @@ fn thread_start_params_from_config(
         config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
         ..ThreadStartParams::default()
+    }
+}
+
+fn requested_thread_id_for_thread_start(
+    command: Option<&ExecCommand>,
+    requested_thread_id: Option<String>,
+) -> Option<String> {
+    match command {
+        Some(ExecCommand::Resume(_)) => None,
+        _ => requested_thread_id,
     }
 }
 
@@ -1635,7 +1616,7 @@ fn resolve_prompt(prompt_arg: Option<String>) -> String {
 }
 
 fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
-    let pathspecs = resolve_review_pathspecs(args)?;
+    let pathspecs = resolve_review_pathspecs(args)?.unwrap_or_default();
     let target = if args.uncommitted {
         ReviewTarget::UncommittedChanges
     } else if args.staged {
@@ -1701,12 +1682,13 @@ fn normalize_review_pathspecs(pathspecs: Vec<String>) -> anyhow::Result<Option<V
     }
 
     if normalized.is_empty() {
-        anyhow::bail!("Review pathspecs must include at least one non-empty path");
+        anyhow::bail!("Review pathspecs must not be empty");
     }
 
     Ok(Some(normalized))
 }
 
+#[cfg(test)]
 fn review_status_for_exit_payload(
     payload: &codex_protocol::protocol::ExitedReviewModeEvent,
 ) -> Option<ReviewLifecycleStatus<'_>> {
@@ -1716,6 +1698,7 @@ fn review_status_for_exit_payload(
         .map(ReviewLifecycleStatus::Finished)
 }
 
+#[cfg(test)]
 fn review_status_for_abort_reason(
     reason: &codex_protocol::protocol::TurnAbortReason,
 ) -> ReviewLifecycleStatus<'static> {
@@ -1728,6 +1711,7 @@ fn review_status_for_abort_reason(
     }
 }
 
+#[cfg(test)]
 fn try_parse_review_output_event(
     text: &str,
 ) -> Option<codex_protocol::protocol::ReviewOutputEvent> {
@@ -1803,7 +1787,7 @@ mod tests {
 
         let expected = ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
-            pathspecs: None,
+            pathspecs: Vec::new(),
             user_facing_hint: None,
         };
 
@@ -1830,7 +1814,7 @@ mod tests {
                 sha: "123456789".to_string(),
                 title: Some("Add review command".to_string()),
             },
-            pathspecs: None,
+            pathspecs: Vec::new(),
             user_facing_hint: None,
         };
 
@@ -1856,7 +1840,7 @@ mod tests {
             target: ReviewTarget::Custom {
                 instructions: "custom review instructions".to_string(),
             },
-            pathspecs: None,
+            pathspecs: Vec::new(),
             user_facing_hint: None,
         };
 
@@ -1880,7 +1864,7 @@ mod tests {
 
         let expected = ReviewRequest {
             target: ReviewTarget::StagedChanges,
-            pathspecs: None,
+            pathspecs: Vec::new(),
             user_facing_hint: None,
         };
 
@@ -1908,7 +1892,7 @@ mod tests {
 
         let expected = ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
-            pathspecs: Some(vec!["src/lib.rs".to_string(), "src/main.rs".to_string()]),
+            pathspecs: vec!["src/lib.rs".to_string(), "src/main.rs".to_string()],
             user_facing_hint: None,
         };
 
@@ -1932,7 +1916,7 @@ mod tests {
 
         let expected = ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
-            pathspecs: Some(vec!["src/lib.rs".to_string(), "src/main.rs".to_string()]),
+            pathspecs: vec!["src/lib.rs".to_string(), "src/main.rs".to_string()],
             user_facing_hint: None,
         };
 
@@ -1961,7 +1945,7 @@ mod tests {
 
         let expected = ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
-            pathspecs: Some(vec!["src/lib.rs".to_string(), "src/main.rs".to_string()]),
+            pathspecs: vec!["src/lib.rs".to_string(), "src/main.rs".to_string()],
             user_facing_hint: None,
         };
 
@@ -1986,10 +1970,7 @@ mod tests {
         };
         let error = build_review_request(&args).expect_err("rejects empty pathspec file");
 
-        assert_eq!(
-            error.to_string(),
-            "Review pathspecs must include at least one non-empty path"
-        );
+        assert_eq!(error.to_string(), "Review pathspecs must not be empty");
     }
 
     #[test]
@@ -2012,7 +1993,7 @@ mod tests {
             target: ReviewTarget::Custom {
                 instructions: "focus on panics".to_string(),
             },
-            pathspecs: Some(vec!["src/lib.rs".to_string(), "src/main.rs".to_string()]),
+            pathspecs: vec!["src/lib.rs".to_string(), "src/main.rs".to_string()],
             user_facing_hint: None,
         };
 
@@ -2113,6 +2094,33 @@ mod tests {
             review_status_for_exit_payload(&payload),
             Some(ReviewLifecycleStatus::Finished(_))
         ));
+    }
+
+    #[test]
+    fn thread_start_params_forward_requested_session_id() {
+        let config =
+            Config::load_default_with_cli_overrides(Vec::new()).expect("load default config");
+        let requested_thread_id = "123e4567-e89b-12d3-a456-426614174000".to_string();
+
+        let params = thread_start_params_from_config(&config, Some(requested_thread_id.clone()));
+
+        assert_eq!(params.thread_id, Some(requested_thread_id));
+    }
+
+    #[test]
+    fn requested_thread_id_for_thread_start_ignores_resume_lookup_tokens() {
+        let command = ExecCommand::Resume(cli::ResumeArgs {
+            session_id: Some("friendly-name".to_string()),
+            last: false,
+            all: false,
+            images: Vec::new(),
+            prompt: None,
+        });
+
+        let requested =
+            requested_thread_id_for_thread_start(Some(&command), Some("friendly-name".to_string()));
+
+        assert_eq!(requested, None);
     }
 
     #[test]
