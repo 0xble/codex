@@ -6001,13 +6001,6 @@ impl ChatWidget {
                     "Fast off".to_string()
                 },
             ),
-            StatusLineItem::AutoMode => Some(
-                if self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Auto {
-                    "Auto on".to_string()
-                } else {
-                    "Auto off".to_string()
-                },
-            ),
         }
     }
 

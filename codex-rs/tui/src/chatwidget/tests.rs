@@ -10711,45 +10711,6 @@ async fn status_line_fast_mode_footer_snapshot() {
 }
 
 #[tokio::test]
-async fn status_line_auto_mode_renders_on_and_off() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.config.tui_status_line = Some(vec!["auto-mode".to_string()]);
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
-
-    chat.refresh_status_line();
-    assert_eq!(status_line_text(&chat), Some("Auto off".to_string()));
-
-    let auto_mask = collaboration_modes::auto_mask(chat.models_manager.as_ref())
-        .expect("expected auto collaboration mode");
-    chat.set_collaboration_mask(auto_mask);
-    chat.refresh_status_line();
-    assert_eq!(status_line_text(&chat), Some("Auto on".to_string()));
-}
-
-#[tokio::test]
-async fn status_line_auto_mode_footer_snapshot() {
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.show_welcome_banner = false;
-    chat.config.tui_status_line = Some(vec!["auto-mode".to_string()]);
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
-    let auto_mask = collaboration_modes::auto_mask(chat.models_manager.as_ref())
-        .expect("expected auto collaboration mode");
-    chat.set_collaboration_mask(auto_mask);
-    chat.refresh_status_line();
-
-    let width = 80;
-    let height = chat.desired_height(width);
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
-    terminal
-        .draw(|f| chat.render(f.area(), f.buffer_mut()))
-        .expect("draw auto-mode footer");
-    assert_snapshot!("status_line_auto_mode_footer", terminal.backend());
-}
-
-#[tokio::test]
 async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.config.cwd = PathBuf::from("/tmp/project");
