@@ -81,6 +81,17 @@ Plan preset. The string value `none` means "no reasoning" (an explicit Plan
 override), not "inherit the global default". There is currently no separate
 config value for "follow the global default in Plan mode".
 
+## Auto mode
+
+Auto mode is available in the current TUI session through `/auto`, `/collab`,
+and `Shift+Tab`, but it is not a persisted startup mode and is not restored
+automatically in later sessions. When Auto is selected without Full Access
+permissions, Codex shows a non-blocking warning because approval prompts or
+sandbox limits may still interrupt execution.
+
+The TUI status line also supports an `auto-mode` item, which renders as
+`Auto on` or `Auto off`.
+
 ## Realtime start instructions
 
 `experimental_realtime_start_instructions` lets you replace the built-in

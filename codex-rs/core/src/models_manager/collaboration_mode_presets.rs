@@ -8,12 +8,17 @@ use std::sync::LazyLock;
 const COLLABORATION_MODE_PLAN: &str = include_str!("../../templates/collaboration_mode/plan.md");
 const COLLABORATION_MODE_DEFAULT: &str =
     include_str!("../../templates/collaboration_mode/default.md");
+const COLLABORATION_MODE_AUTO: &str = include_str!("../../templates/collaboration_mode/auto.md");
 const KNOWN_MODE_NAMES_TEMPLATE_KEY: &str = "KNOWN_MODE_NAMES";
 const REQUEST_USER_INPUT_AVAILABILITY_TEMPLATE_KEY: &str = "REQUEST_USER_INPUT_AVAILABILITY";
 const ASKING_QUESTIONS_GUIDANCE_TEMPLATE_KEY: &str = "ASKING_QUESTIONS_GUIDANCE";
 static COLLABORATION_MODE_DEFAULT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     Template::parse(COLLABORATION_MODE_DEFAULT)
         .unwrap_or_else(|err| panic!("collaboration mode default template must parse: {err}"))
+});
+static COLLABORATION_MODE_AUTO_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
+    Template::parse(COLLABORATION_MODE_AUTO)
+        .unwrap_or_else(|err| panic!("collaboration mode auto template must parse: {err}"))
 });
 
 /// Stores feature flags that control collaboration-mode behavior.
@@ -30,7 +35,11 @@ pub struct CollaborationModesConfig {
 pub fn builtin_collaboration_mode_presets(
     collaboration_modes_config: CollaborationModesConfig,
 ) -> Vec<CollaborationModeMask> {
-    vec![plan_preset(), default_preset(collaboration_modes_config)]
+    vec![
+        default_preset(collaboration_modes_config),
+        plan_preset(),
+        auto_preset(),
+    ]
 }
 
 fn plan_preset() -> CollaborationModeMask {
@@ -50,6 +59,16 @@ fn default_preset(collaboration_modes_config: CollaborationModesConfig) -> Colla
         model: None,
         reasoning_effort: None,
         developer_instructions: Some(Some(default_mode_instructions(collaboration_modes_config))),
+    }
+}
+
+fn auto_preset() -> CollaborationModeMask {
+    CollaborationModeMask {
+        name: ModeKind::Auto.display_name().to_string(),
+        mode: Some(ModeKind::Auto),
+        model: None,
+        reasoning_effort: None,
+        developer_instructions: Some(Some(auto_mode_instructions())),
     }
 }
 
@@ -75,6 +94,13 @@ fn default_mode_instructions(collaboration_modes_config: CollaborationModesConfi
             ),
         ])
         .unwrap_or_else(|err| panic!("collaboration mode default template must render: {err}"))
+}
+
+fn auto_mode_instructions() -> String {
+    let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
+    COLLABORATION_MODE_AUTO_TEMPLATE
+        .render([(KNOWN_MODE_NAMES_TEMPLATE_KEY, known_mode_names.as_str())])
+        .unwrap_or_else(|err| panic!("collaboration mode auto template must render: {err}"))
 }
 
 fn format_mode_names(modes: &[ModeKind]) -> String {

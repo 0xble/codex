@@ -2567,6 +2567,31 @@ impl ChatWidget {
         });
     }
 
+    fn current_permissions_are_full_access(&self) -> bool {
+        let current_approval = self.config.permissions.approval_policy.value();
+        let current_sandbox = self.config.permissions.sandbox_policy.get();
+        builtin_approval_presets()
+            .into_iter()
+            .find(|preset| preset.id == "full-access")
+            .is_some_and(|preset| {
+                Self::preset_matches_current(current_approval, current_sandbox, &preset)
+            })
+    }
+
+    fn maybe_warn_auto_mode_permissions(&mut self, previous_mode: ModeKind, next_mode: ModeKind) {
+        if previous_mode == ModeKind::Auto || next_mode != ModeKind::Auto {
+            return;
+        }
+        if self.current_permissions_are_full_access() {
+            return;
+        }
+
+        self.on_warning(
+            "Auto mode may be constrained by current permissions. You are not in Full Access, so Auto may still stop for approval requests or sandbox limits."
+                .to_string(),
+        );
+    }
+
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         match info {
             Some(info) => self.apply_token_info(info),
@@ -3163,8 +3188,13 @@ impl ChatWidget {
                 .collect(),
             rejected_steers_queue: self.rejected_steers_queue.clone(),
             queued_user_messages: self.queued_user_messages.clone(),
-            current_collaboration_mode: self.current_collaboration_mode.clone(),
-            active_collaboration_mask: self.active_collaboration_mask.clone(),
+            current_collaboration_mode: Self::normalize_persisted_collaboration_mode(
+                self.current_collaboration_mode.clone(),
+            ),
+            active_collaboration_mask: self
+                .active_collaboration_mask
+                .clone()
+                .filter(|mask| mask.mode != Some(ModeKind::Auto)),
             task_running: self.bottom_pane.is_task_running(),
             agent_turn_running: self.agent_turn_running,
         })
@@ -3173,8 +3203,12 @@ impl ChatWidget {
     pub(crate) fn restore_thread_input_state(&mut self, input_state: Option<ThreadInputState>) {
         let restored_task_running = input_state.as_ref().is_some_and(|state| state.task_running);
         if let Some(input_state) = input_state {
-            self.current_collaboration_mode = input_state.current_collaboration_mode;
-            self.active_collaboration_mask = input_state.active_collaboration_mask;
+            self.current_collaboration_mode = Self::normalize_persisted_collaboration_mode(
+                input_state.current_collaboration_mode,
+            );
+            self.active_collaboration_mask = input_state
+                .active_collaboration_mask
+                .filter(|mask| mask.mode != Some(ModeKind::Auto));
             self.agent_turn_running = input_state.agent_turn_running;
             self.update_collaboration_mode_indicator();
             self.refresh_model_dependent_surfaces();
@@ -5155,6 +5189,25 @@ impl ChatWidget {
                     );
                 }
             }
+            SlashCommand::Auto => {
+                if !self.collaboration_modes_enabled() {
+                    self.add_info_message(
+                        "Collaboration modes are disabled.".to_string(),
+                        Some("Enable collaboration modes to use /auto.".to_string()),
+                    );
+                    return;
+                }
+                let target_mask = if self.active_mode_kind() == ModeKind::Auto {
+                    collaboration_modes::default_mode_mask(self.model_catalog.as_ref())
+                } else {
+                    collaboration_modes::auto_mask(self.model_catalog.as_ref())
+                };
+                if let Some(mask) = target_mask {
+                    self.set_collaboration_mask(mask);
+                } else {
+                    self.add_info_message("Auto mode unavailable right now.".to_string(), None);
+                }
+            }
             SlashCommand::Collab => {
                 if !self.collaboration_modes_enabled() {
                     self.add_info_message(
@@ -5488,6 +5541,9 @@ impl ChatWidget {
                 } else {
                     self.queue_user_message(user_message);
                 }
+            }
+            SlashCommand::Auto if !trimmed.is_empty() => {
+                self.add_error_message("Usage: /auto".to_string());
             }
             SlashCommand::Review if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) = self
@@ -7445,6 +7501,197 @@ impl ChatWidget {
             terminal_width,
         );
         self.bottom_pane.show_selection_view(params);
+    }
+
+    /// Parses configured status-line ids into known items and collects unknown ids.
+    ///
+    /// Unknown ids are deduplicated in insertion order for warning messages.
+    fn status_line_items_with_invalids(&self) -> (Vec<StatusLineItem>, Vec<String>) {
+        let mut invalid = Vec::new();
+        let mut invalid_seen = HashSet::new();
+        let mut items = Vec::new();
+        for id in self.configured_status_line_items() {
+            match id.parse::<StatusLineItem>() {
+                Ok(item) => items.push(item),
+                Err(_) => {
+                    if invalid_seen.insert(id.clone()) {
+                        invalid.push(format!(r#""{id}""#));
+                    }
+                }
+            }
+        }
+        (items, invalid)
+    }
+
+    fn configured_status_line_items(&self) -> Vec<String> {
+        self.config.tui_status_line.clone().unwrap_or_else(|| {
+            DEFAULT_STATUS_LINE_ITEMS
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        })
+    }
+
+    fn status_line_cwd(&self) -> &Path {
+        self.current_cwd.as_ref().unwrap_or(&self.config.cwd)
+    }
+
+    fn status_line_project_root(&self) -> Option<PathBuf> {
+        let cwd = self.status_line_cwd();
+        if let Some(repo_root) = get_git_repo_root(cwd) {
+            return Some(repo_root);
+        }
+
+        self.config
+            .config_layer_stack
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
+            .iter()
+            .find_map(|layer| match &layer.name {
+                ConfigLayerSource::Project { dot_codex_folder } => {
+                    dot_codex_folder.as_path().parent().map(Path::to_path_buf)
+                }
+                _ => None,
+            })
+    }
+
+    fn status_line_project_root_name(&self) -> Option<String> {
+        self.status_line_project_root().map(|root| {
+            root.file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| format_directory_display(&root, /*max_width*/ None))
+        })
+    }
+
+    /// Resets git-branch cache state when the status-line cwd changes.
+    ///
+    /// The branch cache is keyed by cwd because branch lookup is performed relative to that path.
+    /// Keeping stale branch values across cwd changes would surface incorrect repository context.
+    fn sync_status_line_branch_state(&mut self, cwd: &Path) {
+        if self
+            .status_line_branch_cwd
+            .as_ref()
+            .is_some_and(|path| path == cwd)
+        {
+            return;
+        }
+        self.status_line_branch_cwd = Some(cwd.to_path_buf());
+        self.status_line_branch = None;
+        self.status_line_branch_pending = false;
+        self.status_line_branch_lookup_complete = false;
+    }
+
+    /// Starts an async git-branch lookup unless one is already running.
+    ///
+    /// The resulting `StatusLineBranchUpdated` event carries the lookup cwd so callers can reject
+    /// stale completions after directory changes.
+    fn request_status_line_branch(&mut self, cwd: PathBuf) {
+        if self.status_line_branch_pending {
+            return;
+        }
+        self.status_line_branch_pending = true;
+        let tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let branch = current_branch_name(&cwd).await;
+            tx.send(AppEvent::StatusLineBranchUpdated { cwd, branch });
+        });
+    }
+
+    /// Resolves a display string for one configured status-line item.
+    ///
+    /// Returning `None` means "omit this item for now", not "configuration error". Callers rely on
+    /// this to keep partially available status lines readable while waiting for session, token, or
+    /// git metadata.
+    fn status_line_value_for_item(&self, item: &StatusLineItem) -> Option<String> {
+        match item {
+            StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
+            StatusLineItem::ModelWithReasoning => {
+                let label =
+                    Self::status_line_reasoning_effort_label(self.effective_reasoning_effort());
+                let fast_label = if self
+                    .should_show_fast_status(self.current_model(), self.config.service_tier)
+                {
+                    " fast"
+                } else {
+                    ""
+                };
+                Some(format!("{} {label}{fast_label}", self.model_display_name()))
+            }
+            StatusLineItem::CurrentDir => {
+                Some(format_directory_display(
+                    self.status_line_cwd(),
+                    /*max_width*/ None,
+                ))
+            }
+            StatusLineItem::ProjectRoot => self.status_line_project_root_name(),
+            StatusLineItem::GitBranch => self.status_line_branch.clone(),
+            StatusLineItem::UsedTokens => {
+                let usage = self.status_line_total_usage();
+                let total = usage.tokens_in_context_window();
+                if total <= 0 {
+                    None
+                } else {
+                    Some(format!("{} used", format_tokens_compact(total)))
+                }
+            }
+            StatusLineItem::ContextRemaining => self
+                .status_line_context_remaining_percent()
+                .map(|remaining| format!("{remaining}% left")),
+            StatusLineItem::ContextUsed => self
+                .status_line_context_used_percent()
+                .map(|used| format!("{used}% used")),
+            StatusLineItem::FiveHourLimit => {
+                let window = self
+                    .rate_limit_snapshots_by_limit_id
+                    .get("codex")
+                    .and_then(|s| s.primary.as_ref());
+                let label = window
+                    .and_then(|window| window.window_minutes)
+                    .map(get_limits_duration)
+                    .unwrap_or_else(|| "5h".to_string());
+                self.status_line_limit_display(window, &label)
+            }
+            StatusLineItem::WeeklyLimit => {
+                let window = self
+                    .rate_limit_snapshots_by_limit_id
+                    .get("codex")
+                    .and_then(|s| s.secondary.as_ref());
+                let label = window
+                    .and_then(|window| window.window_minutes)
+                    .map(get_limits_duration)
+                    .unwrap_or_else(|| "weekly".to_string());
+                self.status_line_limit_display(window, &label)
+            }
+            StatusLineItem::CodexVersion => Some(CODEX_CLI_VERSION.to_string()),
+            StatusLineItem::ContextWindowSize => self
+                .status_line_context_window_size()
+                .map(|cws| format!("{} window", format_tokens_compact(cws))),
+            StatusLineItem::TotalInputTokens => Some(format!(
+                "{} in",
+                format_tokens_compact(self.status_line_total_usage().input_tokens)
+            )),
+            StatusLineItem::TotalOutputTokens => Some(format!(
+                "{} out",
+                format_tokens_compact(self.status_line_total_usage().output_tokens)
+            )),
+            StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
+            StatusLineItem::FastMode => Some(
+                if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
+                    "Fast on".to_string()
+                } else {
+                    "Fast off".to_string()
+                },
+            ),
+            StatusLineItem::AutoMode => Some(
+                if self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Auto {
+                    "Auto on".to_string()
+                } else {
+                    "Auto off".to_string()
+                },
+            ),
+        }
     }
 
     fn status_line_context_window_size(&self) -> Option<i64> {
@@ -9721,6 +9968,15 @@ impl ChatWidget {
             .unwrap_or(ModeKind::Default)
     }
 
+    fn normalize_persisted_collaboration_mode(
+        mut collaboration_mode: CollaborationMode,
+    ) -> CollaborationMode {
+        if collaboration_mode.mode == ModeKind::Auto {
+            collaboration_mode.mode = ModeKind::Default;
+        }
+        collaboration_mode
+    }
+
     fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
         if !self.collaboration_modes_enabled() {
             return self.current_collaboration_mode.reasoning_effort();
@@ -9789,6 +10045,7 @@ impl ChatWidget {
         }
         match self.active_mode_kind() {
             ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
+            ModeKind::Auto => Some(CollaborationModeIndicator::Auto),
             ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => None,
         }
     }
@@ -9814,16 +10071,19 @@ impl ChatWidget {
         }
     }
 
-    /// Cycle to the next collaboration mode variant (Plan -> Default -> Plan).
+    /// Cycle to the next collaboration mode variant (Default -> Plan -> Auto -> Default).
     fn cycle_collaboration_mode(&mut self) {
         if !self.collaboration_modes_enabled() {
             return;
         }
 
-        if let Some(next_mask) = collaboration_modes::next_mask(
-            self.model_catalog.as_ref(),
-            self.active_collaboration_mask.as_ref(),
-        ) {
+        let current_mask = self
+            .active_collaboration_mask
+            .clone()
+            .or_else(|| collaboration_modes::default_mode_mask(self.model_catalog.as_ref()));
+        if let Some(next_mask) =
+            collaboration_modes::next_mask(self.model_catalog.as_ref(), current_mask.as_ref())
+        {
             self.set_collaboration_mask(next_mask);
         }
     }
@@ -9848,6 +10108,7 @@ impl ChatWidget {
         self.update_collaboration_mode_indicator();
         self.refresh_model_dependent_surfaces();
         let next_mode = self.active_mode_kind();
+        self.maybe_warn_auto_mode_permissions(previous_mode, next_mode);
         let next_model = self.current_model();
         let next_effort = self.effective_reasoning_effort();
         if previous_mode != next_mode

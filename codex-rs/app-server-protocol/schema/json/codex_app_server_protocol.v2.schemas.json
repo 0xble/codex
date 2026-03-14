@@ -6734,41 +6734,6 @@
       ],
       "title": "EventMsg"
     },
-    "ExecApprovalRequestSkillMetadata": {
-      "properties": {
-        "path_to_skills_md": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "path_to_skills_md"
-      ],
-      "type": "object"
-    },
-    "ExecCommandSource": {
-      "enum": [
-        "agent",
-        "user_shell",
-        "unified_exec_startup",
-        "unified_exec_interaction"
-      ],
-      "type": "string"
-    },
-    "ExecCommandStatus": {
-      "enum": [
-        "completed",
-        "failed",
-        "declined"
-      ],
-      "type": "string"
-    },
-    "ExecOutputStream": {
-      "enum": [
-        "stdout",
-        "stderr"
-      ],
-      "type": "string"
-    },
     "EventMsg": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Response event from the agent NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.",
@@ -9727,6 +9692,26 @@
       ],
       "type": "object"
     },
+    "ExecApprovalRequestSkillMetadata": {
+      "properties": {
+        "path_to_skills_md": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path_to_skills_md"
+      ],
+      "type": "object"
+    },
+    "ExecCommandSource": {
+      "enum": [
+        "agent",
+        "user_shell",
+        "unified_exec_startup",
+        "unified_exec_interaction"
+      ],
+      "type": "string"
+    },
     "ExecCommandSource": {
       "enum": [
         "agent",
@@ -9741,6 +9726,21 @@
         "completed",
         "failed",
         "declined"
+      ],
+      "type": "string"
+    },
+    "ExecCommandStatus": {
+      "enum": [
+        "completed",
+        "failed",
+        "declined"
+      ],
+      "type": "string"
+    },
+    "ExecOutputStream": {
+      "enum": [
+        "stdout",
+        "stderr"
       ],
       "type": "string"
     },
@@ -11995,7 +11995,8 @@
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
         "plan",
-        "default"
+        "default",
+        "auto"
       ],
       "type": "string"
     },

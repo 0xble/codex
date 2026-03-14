@@ -1918,6 +1918,58 @@
         }
       ]
     },
+    "ElicitationRequest": {
+      "oneOf": [
+        {
+          "properties": {
+            "_meta": true,
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "form"
+              ],
+              "type": "string"
+            },
+            "requested_schema": true
+          },
+          "required": [
+            "message",
+            "mode",
+            "requested_schema"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "_meta": true,
+            "elicitation_id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "url"
+              ],
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "elicitation_id",
+            "message",
+            "mode",
+            "url"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "EventMsg": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Response event from the agent NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.",
@@ -4871,69 +4923,6 @@
       ],
       "title": "EventMsg"
     },
-    "ExecApprovalRequestSkillMetadata": {
-      "properties": {
-        "path_to_skills_md": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "path_to_skills_md"
-      ],
-      "type": "object"
-    },
-    "ElicitationRequest": {
-      "oneOf": [
-        {
-          "properties": {
-            "_meta": true,
-            "message": {
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "form"
-              ],
-              "type": "string"
-            },
-            "requested_schema": true
-          },
-          "required": [
-            "message",
-            "mode",
-            "requested_schema"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "_meta": true,
-            "elicitation_id": {
-              "type": "string"
-            },
-            "message": {
-              "type": "string"
-            },
-            "mode": {
-              "enum": [
-                "url"
-              ],
-              "type": "string"
-            },
-            "url": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "elicitation_id",
-            "message",
-            "mode",
-            "url"
-          ],
-          "type": "object"
-        }
-      ]
-    },
     "EventMsg": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Response event from the agent NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.",
@@ -7880,6 +7869,17 @@
         }
       ],
       "title": "EventMsg"
+    },
+    "ExecApprovalRequestSkillMetadata": {
+      "properties": {
+        "path_to_skills_md": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path_to_skills_md"
+      ],
+      "type": "object"
     },
     "ExecApprovalRequestSkillMetadata": {
       "properties": {
@@ -15228,7 +15228,8 @@
         "description": "Initial collaboration mode to use when the TUI starts.",
         "enum": [
           "plan",
-          "default"
+          "default",
+          "auto"
         ],
         "type": "string"
       },
