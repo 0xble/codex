@@ -22,6 +22,7 @@ pub(crate) struct SessionState {
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) server_reasoning_included: bool,
+    auto_thread_name_generation_in_flight: bool,
     pub(crate) dependency_env: HashMap<String, String>,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
     /// Settings used by the latest regular user turn, used for turn-to-turn
@@ -44,6 +45,7 @@ impl SessionState {
             history,
             latest_rate_limits: None,
             server_reasoning_included: false,
+            auto_thread_name_generation_in_flight: false,
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
             previous_turn_settings: None,
@@ -161,6 +163,20 @@ impl SessionState {
 
     pub(crate) fn dependency_env(&self) -> HashMap<String, String> {
         self.dependency_env.clone()
+    }
+
+    pub(crate) fn start_auto_thread_name_generation(&mut self) -> bool {
+        if self.auto_thread_name_generation_in_flight
+            || self.session_configuration.has_thread_name()
+        {
+            return false;
+        }
+        self.auto_thread_name_generation_in_flight = true;
+        true
+    }
+
+    pub(crate) fn finish_auto_thread_name_generation(&mut self) {
+        self.auto_thread_name_generation_in_flight = false;
     }
 
     pub(crate) fn set_session_startup_prewarm(

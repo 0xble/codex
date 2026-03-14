@@ -820,6 +820,7 @@ pub(crate) struct Session {
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
+    thread_name_lock: Mutex<()>,
 }
 
 #[derive(Clone, Debug)]
@@ -1123,6 +1124,10 @@ pub(crate) struct SessionConfiguration {
 impl SessionConfiguration {
     pub(crate) fn codex_home(&self) -> &PathBuf {
         &self.codex_home
+    }
+
+    pub(crate) fn has_thread_name(&self) -> bool {
+        self.thread_name.is_some()
     }
 
     fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
@@ -1938,6 +1943,7 @@ impl Session {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
+            thread_name_lock: Mutex::new(()),
         });
         if let Some(network_policy_decider_session) = network_policy_decider_session {
             let mut guard = network_policy_decider_session.write().await;
@@ -3902,7 +3908,7 @@ impl Session {
     }
 
     pub(crate) async fn record_user_prompt_and_emit_turn_item(
-        &self,
+        self: &Arc<Self>,
         turn_context: &TurnContext,
         input: &[UserInput],
         response_item: ResponseItem,
@@ -3916,6 +3922,44 @@ impl Session {
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
         self.ensure_rollout_materialized().await;
+        self.maybe_schedule_generated_thread_name(turn_context, input)
+            .await;
+    }
+
+    async fn maybe_schedule_generated_thread_name(
+        self: &Arc<Self>,
+        turn_context: &TurnContext,
+        input: &[UserInput],
+    ) {
+        let Some(prompt_text) = crate::thread_title::prompt_text_from_user_input(input) else {
+            return;
+        };
+        {
+            let mut state = self.state.lock().await;
+            if !state.start_auto_thread_name_generation() {
+                return;
+            }
+        }
+
+        let sess = Arc::clone(self);
+        let config = Arc::clone(&turn_context.config);
+        let cwd = turn_context.cwd.clone();
+        tokio::spawn(async move {
+            let generated = crate::thread_title::generate_thread_title(
+                &sess.services,
+                config.as_ref(),
+                cwd.as_path(),
+                &prompt_text,
+            )
+            .await;
+
+            if let Some(name) = generated {
+                handlers::set_thread_name_if_absent(&sess, name).await;
+            }
+
+            let mut state = sess.state.lock().await;
+            state.finish_auto_thread_name_generation();
+        });
     }
 
     pub(crate) async fn notify_background_event(
@@ -5307,40 +5351,16 @@ mod handlers {
             return;
         };
 
-        let persistence_enabled = {
-            let rollout = sess.services.rollout.lock().await;
-            rollout.is_some()
-        };
-        if !persistence_enabled {
+        if let Err(message) = persist_thread_name(sess, &name, false).await {
             let event = Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
-                    message: "Session persistence is disabled; cannot rename thread.".to_string(),
+                    message,
                     codex_error_info: Some(CodexErrorInfo::Other),
                 }),
             };
             sess.send_event_raw(event).await;
             return;
-        };
-
-        let codex_home = sess.codex_home().await;
-        if let Err(e) =
-            session_index::append_thread_name(&codex_home, sess.conversation_id, &name).await
-        {
-            let event = Event {
-                id: sub_id,
-                msg: EventMsg::Error(ErrorEvent {
-                    message: format!("Failed to set thread name: {e}"),
-                    codex_error_info: Some(CodexErrorInfo::Other),
-                }),
-            };
-            sess.send_event_raw(event).await;
-            return;
-        }
-
-        {
-            let mut state = sess.state.lock().await;
-            state.session_configuration.thread_name = Some(name.clone());
         }
 
         sess.send_event_raw(Event {
@@ -5351,6 +5371,59 @@ mod handlers {
             }),
         })
         .await;
+    }
+
+    pub async fn set_thread_name_if_absent(sess: &Arc<Session>, name: String) {
+        let Some(name) = crate::util::normalize_thread_name(&name) else {
+            return;
+        };
+        if persist_thread_name(sess, &name, true).await.is_err() {
+            return;
+        }
+
+        sess.send_event_raw(Event {
+            id: sess.next_internal_sub_id(),
+            msg: EventMsg::ThreadNameUpdated(ThreadNameUpdatedEvent {
+                thread_id: sess.conversation_id,
+                thread_name: Some(name),
+            }),
+        })
+        .await;
+    }
+
+    async fn persist_thread_name(
+        sess: &Arc<Session>,
+        name: &str,
+        only_if_absent: bool,
+    ) -> Result<(), String> {
+        let _thread_name_guard = sess.thread_name_lock.lock().await;
+
+        let persistence_enabled = {
+            let rollout = sess.services.rollout.lock().await;
+            rollout.is_some()
+        };
+        if !persistence_enabled {
+            return Err("Session persistence is disabled; cannot rename thread.".to_string());
+        }
+
+        {
+            let state = sess.state.lock().await;
+            if only_if_absent && state.session_configuration.thread_name.is_some() {
+                return Ok(());
+            }
+        }
+
+        let codex_home = sess.codex_home().await;
+        session_index::append_thread_name(&codex_home, sess.conversation_id, name)
+            .await
+            .map_err(|err| format!("Failed to set thread name: {err}"))?;
+
+        let mut state = sess.state.lock().await;
+        if only_if_absent && state.session_configuration.thread_name.is_some() {
+            return Ok(());
+        }
+        state.session_configuration.thread_name = Some(name.to_string());
+        Ok(())
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {

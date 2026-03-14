@@ -2756,6 +2756,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         services,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
+        thread_name_lock: Mutex::new(()),
     };
 
     (session, turn_context)
@@ -3598,6 +3599,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         services,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
+        thread_name_lock: Mutex::new(()),
     });
 
     (session, turn_context, rx_event)

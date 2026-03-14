@@ -33,7 +33,9 @@ pub fn apply_rollout_item(
 pub fn rollout_item_affects_thread_metadata(item: &RolloutItem) -> bool {
     match item {
         RolloutItem::SessionMeta(_) | RolloutItem::TurnContext(_) => true,
-        RolloutItem::EventMsg(EventMsg::TokenCount(_) | EventMsg::UserMessage(_)) => true,
+        RolloutItem::EventMsg(
+            EventMsg::TokenCount(_) | EventMsg::UserMessage(_) | EventMsg::ThreadNameUpdated(_),
+        ) => true,
         RolloutItem::EventMsg(_) | RolloutItem::ResponseItem(_) | RolloutItem::Compacted(_) => {
             false
         }
@@ -88,12 +90,9 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
             if metadata.first_user_message.is_none() {
                 metadata.first_user_message = user_message_preview(user);
             }
-            if metadata.title.is_empty() {
-                let title = strip_user_message_prefix(user.message.as_str());
-                if !title.is_empty() {
-                    metadata.title = title.to_string();
-                }
-            }
+        }
+        EventMsg::ThreadNameUpdated(event) => {
+            metadata.title = event.thread_name.clone().unwrap_or_default();
         }
         _ => {}
     }
@@ -180,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn event_msg_user_messages_set_title_and_first_user_message() {
+    fn event_msg_user_messages_set_first_user_message_without_title() {
         let mut metadata = metadata_for_test();
         let item = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
             message: format!("{USER_MESSAGE_BEGIN} actual user request"),
@@ -195,7 +194,22 @@ mod tests {
             metadata.first_user_message.as_deref(),
             Some("actual user request")
         );
-        assert_eq!(metadata.title, "actual user request");
+        assert_eq!(metadata.title, "");
+    }
+
+    #[test]
+    fn thread_name_updated_event_sets_title() {
+        let mut metadata = metadata_for_test();
+        let item = RolloutItem::EventMsg(EventMsg::ThreadNameUpdated(
+            codex_protocol::protocol::ThreadNameUpdatedEvent {
+                thread_id: metadata.id,
+                thread_name: Some("Fix Title Flow".to_string()),
+            },
+        ));
+
+        apply_rollout_item(&mut metadata, &item, "test-provider");
+
+        assert_eq!(metadata.title, "Fix Title Flow");
     }
 
     #[test]
