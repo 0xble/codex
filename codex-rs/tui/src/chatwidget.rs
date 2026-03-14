@@ -2675,7 +2675,7 @@ impl ChatWidget {
                 Some(wait) if wait.process_id == ev.process_id => {
                     wait.update_command_display(command_display);
                     (
-                        self.current_status_header.clone(),
+                        self.current_status.header.clone(),
                         wait.command_display.clone(),
                     )
                 }
@@ -9152,7 +9152,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn terminal_title_status(&self) -> Option<String> {
-        let status = self.current_status_header.trim();
+        let status = self.current_status.header.trim();
         if status.is_empty() {
             None
         } else {
