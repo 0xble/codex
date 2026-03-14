@@ -115,6 +115,25 @@ mod textarea;
 mod unified_exec_footer;
 pub(crate) use feedback_view::FeedbackNoteView;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TerminalTitleFocus {
+    Approval,
+    Permissions,
+    RequestUserInput,
+    McpElicitation,
+}
+
+impl TerminalTitleFocus {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Approval => "Approval",
+            Self::Permissions => "Permissions",
+            Self::RequestUserInput => "Input",
+            Self::McpElicitation => "MCP Elicitation",
+        }
+    }
+}
+
 /// How long the "press again to quit" hint stays visible.
 ///
 /// This is shared between:
@@ -853,6 +872,11 @@ impl BottomPane {
 
     pub(crate) fn is_task_running(&self) -> bool {
         self.is_task_running
+    }
+
+    pub(crate) fn terminal_title_focus(&self) -> Option<TerminalTitleFocus> {
+        self.active_view()
+            .and_then(bottom_pane_view::BottomPaneView::terminal_title_focus)
     }
 
     #[cfg(test)]

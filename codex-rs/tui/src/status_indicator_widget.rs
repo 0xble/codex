@@ -429,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn details_args_can_disable_capitalization_and_limit_lines() {
+    fn details_args_can_preserve_capitalization_and_limit_lines() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut w = StatusIndicatorWidget::new(

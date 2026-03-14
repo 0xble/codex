@@ -17,6 +17,7 @@ use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
+use crate::bottom_pane::TerminalTitleFocus;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
@@ -91,6 +92,7 @@ use codex_core::config::types::ModelAvailabilityNuxConfig;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::message_history;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_core::find_thread_name_by_id;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 #[cfg(target_os = "windows")]
@@ -163,6 +165,8 @@ use self::pending_interactive_replay::PendingInteractiveReplayState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
+const TITLE_SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const DEFAULT_TITLE_IDENTITY: &str = "Codex";
 
 enum ThreadInteractiveRequest {
     Approval(ApprovalRequest),
@@ -284,6 +288,7 @@ fn guardian_approvals_mode() -> GuardianApprovalsMode {
 /// Smooth-mode streaming drains one line per tick, so this interval controls
 /// perceived typing speed for non-backlogged output.
 const COMMIT_ANIMATION_TICK: Duration = tui::TARGET_FRAME_INTERVAL;
+const TITLE_SPINNER_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -942,6 +947,73 @@ async fn handle_model_migration_prompt_if_needed(
     None
 }
 
+fn normalize_title_segment(segment: Option<String>) -> Option<String> {
+    segment
+        .as_deref()
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .map(ToString::to_string)
+}
+
+fn compute_title_context(
+    thread_name: Option<String>,
+    persisted_thread_name: Option<String>,
+    status_header: Option<String>,
+    focus: Option<TerminalTitleFocus>,
+    task_running: bool,
+    show_spinner: bool,
+    tick: u128,
+) -> Option<String> {
+    let identity = normalize_title_segment(thread_name)
+        .or_else(|| normalize_title_segment(persisted_thread_name));
+    let status = normalize_title_segment(status_header)
+        .filter(|status| !status.eq_ignore_ascii_case("working"));
+    if !task_running {
+        return identity;
+    }
+
+    let title = focus
+        .map(|focus| focus.label().to_string())
+        .or(status)
+        .or(identity)
+        .unwrap_or_else(|| DEFAULT_TITLE_IDENTITY.to_string());
+
+    if show_spinner {
+        let frame = TITLE_SPINNER_FRAMES[tick as usize % TITLE_SPINNER_FRAMES.len()];
+        return Some(format!("{frame} {title}"));
+    }
+
+    Some(title)
+}
+
+fn title_animation_tick() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        / TITLE_SPINNER_INTERVAL.as_millis()
+}
+
+async fn update_terminal_title(tui: &mut tui::Tui, app: &mut App) -> Result<()> {
+    let task_running = app.chat_widget.is_task_running();
+    let animations_enabled = app.chat_widget.config_ref().animations;
+    let title_context = compute_title_context(
+        app.chat_widget.thread_name(),
+        app.refresh_persisted_thread_name(task_running).await,
+        app.chat_widget.terminal_title_status(),
+        app.chat_widget.terminal_title_focus(),
+        task_running,
+        animations_enabled,
+        if animations_enabled {
+            title_animation_tick()
+        } else {
+            0
+        },
+    );
+    tui.set_title_context(title_context.as_deref())?;
+    Ok(())
+}
+
 pub(crate) struct App {
     model_catalog: Arc<ModelCatalog>,
     pub(crate) session_telemetry: SessionTelemetry,
@@ -986,6 +1058,8 @@ pub(crate) struct App {
     remote_app_server_auth_token: Option<String>,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
+    persisted_thread_name: Option<String>,
+    persisted_thread_name_thread_id: Option<ThreadId>,
 
     /// Tracks the thread we intentionally shut down while exiting the app.
     ///
@@ -1055,6 +1129,47 @@ fn active_turn_missing_steer_error(error: &TypedRequestError) -> bool {
 }
 
 impl App {
+    async fn refresh_persisted_thread_name(&mut self, task_running: bool) -> Option<String> {
+        let has_live_thread_name =
+            normalize_title_segment(self.chat_widget.thread_name()).is_some();
+        let live_thread_id = self
+            .active_thread_id
+            .or(self.primary_thread_id)
+            .or(self.chat_widget.thread_id());
+        if has_live_thread_name {
+            self.persisted_thread_name = None;
+            self.persisted_thread_name_thread_id = live_thread_id;
+            return None;
+        }
+
+        let Some(thread_id) = live_thread_id else {
+            self.persisted_thread_name = None;
+            self.persisted_thread_name_thread_id = None;
+            return None;
+        };
+
+        if self.persisted_thread_name_thread_id == Some(thread_id) {
+            if self.persisted_thread_name.is_some() || task_running {
+                return self.persisted_thread_name.clone();
+            }
+        } else {
+            self.persisted_thread_name = None;
+            self.persisted_thread_name_thread_id = Some(thread_id);
+        }
+
+        match find_thread_name_by_id(&self.config.codex_home, &thread_id).await {
+            Ok(thread_name) => {
+                self.persisted_thread_name = thread_name;
+            }
+            Err(err) => {
+                tracing::warn!("Failed to read persisted thread name for terminal title: {err}");
+                self.persisted_thread_name = None;
+            }
+        }
+
+        self.persisted_thread_name.clone()
+    }
+
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
         tui: &mut tui::Tui,
@@ -3728,6 +3843,8 @@ impl App {
             remote_app_server_url,
             remote_app_server_auth_token,
             pending_update_action: None,
+            persisted_thread_name: None,
+            persisted_thread_name_thread_id: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
@@ -3810,6 +3927,7 @@ impl App {
         let exit_reason_result = if let Some(exit_reason) = pre_loop_exit_reason {
             Ok(exit_reason)
         } else {
+            update_terminal_title(tui, &mut app).await?;
             loop {
                 let control = select! {
                     Some(event) = app_event_rx.recv() => {
@@ -3860,6 +3978,9 @@ impl App {
                 ) {
                     waiting_for_initial_session_configured = false;
                 }
+                if let Err(err) = update_terminal_title(tui, &mut app).await {
+                    break Err(err);
+                }
                 match control {
                     AppRunControl::Continue => {}
                     AppRunControl::Exit(reason) => break Ok(reason),
@@ -3870,14 +3991,19 @@ impl App {
             tracing::warn!(error = %err, "failed to shut down embedded app server");
         }
         let clear_result = tui.terminal.clear();
+        let restore_title_result = tui.restore_title();
         let exit_reason = match exit_reason_result {
             Ok(exit_reason) => {
                 clear_result?;
+                restore_title_result?;
                 exit_reason
             }
             Err(err) => {
                 if let Err(clear_err) = clear_result {
                     tracing::warn!(error = %clear_err, "failed to clear terminal UI");
+                }
+                if let Err(title_err) = restore_title_result {
+                    tracing::warn!(error = %title_err, "failed to restore terminal title");
                 }
                 return Err(err);
             }
@@ -6420,6 +6546,90 @@ mod tests {
                 /*has_active_thread_receiver*/ true
             ),
             true
+        );
+    }
+
+    #[test]
+    fn title_context_prefers_focus_while_running() {
+        assert_eq!(
+            compute_title_context(
+                Some("thread name".to_string()),
+                Some("persisted title".to_string()),
+                Some("Reviewing".to_string()),
+                Some(TerminalTitleFocus::Permissions),
+                true,
+                true,
+                0,
+            ),
+            Some("⠋ Permissions".to_string())
+        );
+    }
+
+    #[test]
+    fn title_context_uses_status_when_focus_is_absent() {
+        assert_eq!(
+            compute_title_context(
+                Some("thread name".to_string()),
+                Some("persisted title".to_string()),
+                Some("Reviewing".to_string()),
+                None,
+                true,
+                true,
+                1,
+            ),
+            Some("⠙ Reviewing".to_string())
+        );
+    }
+
+    #[test]
+    fn title_context_falls_back_to_identity_when_idle() {
+        assert_eq!(
+            compute_title_context(
+                Some("named thread".to_string()),
+                Some("persisted title".to_string()),
+                Some("Working".to_string()),
+                Some(TerminalTitleFocus::Approval),
+                false,
+                true,
+                0,
+            ),
+            Some("named thread".to_string())
+        );
+        assert_eq!(
+            compute_title_context(
+                None,
+                Some("persisted title".to_string()),
+                None,
+                None,
+                false,
+                true,
+                0,
+            ),
+            Some("persisted title".to_string())
+        );
+    }
+
+    #[test]
+    fn title_context_falls_back_to_identity_when_running_without_focus_or_status() {
+        assert_eq!(
+            compute_title_context(
+                Some("named thread".to_string()),
+                None,
+                Some("Working".to_string()),
+                None,
+                true,
+                false,
+                0,
+            ),
+            Some("named thread".to_string())
+        );
+    }
+
+    #[test]
+    fn title_context_falls_back_to_codex_when_running_without_any_context() {
+        assert_eq!(
+            compute_title_context(None, None, None, None, true, true, 2),
+            Some("⠹ Codex".to_string())
         );
     }
 
@@ -8973,6 +9183,8 @@ guardian_approval = true
             remote_app_server_url: None,
             remote_app_server_auth_token: None,
             pending_update_action: None,
+            persisted_thread_name: None,
+            persisted_thread_name_thread_id: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
@@ -9027,6 +9239,8 @@ guardian_approval = true
                 remote_app_server_url: None,
                 remote_app_server_auth_token: None,
                 pending_update_action: None,
+                persisted_thread_name: None,
+                persisted_thread_name_thread_id: None,
                 pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),
                 thread_event_channels: HashMap::new(),

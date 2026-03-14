@@ -49,6 +49,7 @@ use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
+use crate::bottom_pane::TerminalTitleFocus;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::bottom_pane::TerminalTitleSetupView;
 use crate::mention_codec::LinkedMention;
@@ -2243,16 +2244,19 @@ impl ChatWidget {
         // (between **/**) as the chunk header. Show this header as status.
         self.reasoning_buffer.push_str(&delta);
 
-        if self.unified_exec_wait_streak.is_some() {
-            // Unified exec waiting should take precedence over reasoning-derived status headers.
-            self.request_redraw();
-            return;
-        }
-
         if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
             // Update the shimmer header to the extracted reasoning chunk header.
             self.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
-            self.set_status_header(header);
+            if let Some(wait) = self.unified_exec_wait_streak.as_ref() {
+                self.set_status(
+                    header,
+                    wait.command_display.clone(),
+                    StatusDetailsCapitalization::Preserve,
+                    1,
+                )
+            } else {
+                self.set_status_header(header)
+            }
         } else {
             // Fallback while we don't yet have a bold header: leave existing header as-is.
         }
@@ -3483,32 +3487,43 @@ impl ChatWidget {
             .map(|process| process.command_display.clone());
         if ev.stdin.is_empty() {
             // Empty stdin means we are polling for background output.
-            // Surface this in the status indicator (single "waiting" surface) instead of
-            // the transcript. Keep the header short so the interrupt hint remains visible.
+            // Keep tracking the wait streak for transcript/history bookkeeping, and surface a
+            // shorter wait label than the old "Waiting for background terminal" copy. The footer
+            // still carries the fuller background-process summary and command context.
             self.bottom_pane.ensure_status_indicator();
             self.bottom_pane
                 .set_interrupt_hint_visible(/*visible*/ true);
             self.terminal_title_status_kind = TerminalTitleStatusKind::WaitingForBackgroundTerminal;
-            self.set_status(
-                "Waiting for background terminal".to_string(),
-                command_display.clone(),
-                StatusDetailsCapitalization::Preserve,
-                /*details_max_lines*/ 1,
-            );
-            match &mut self.unified_exec_wait_streak {
+            let (header, details) = match &mut self.unified_exec_wait_streak {
                 Some(wait) if wait.process_id == ev.process_id => {
                     wait.update_command_display(command_display);
+                    (
+                        self.current_status.header.clone(),
+                        wait.command_display.clone(),
+                    )
                 }
                 Some(_) => {
                     self.flush_unified_exec_wait_streak();
-                    self.unified_exec_wait_streak =
-                        Some(UnifiedExecWaitStreak::new(ev.process_id, command_display));
+                    self.unified_exec_wait_streak = Some(UnifiedExecWaitStreak::new(
+                        ev.process_id,
+                        command_display.clone(),
+                    ));
+                    (String::from("Working in background"), command_display)
                 }
                 None => {
-                    self.unified_exec_wait_streak =
-                        Some(UnifiedExecWaitStreak::new(ev.process_id, command_display));
+                    self.unified_exec_wait_streak = Some(UnifiedExecWaitStreak::new(
+                        ev.process_id,
+                        command_display.clone(),
+                    ));
+                    (String::from("Working in background"), command_display)
                 }
-            }
+            };
+            self.set_status(
+                header,
+                details,
+                StatusDetailsCapitalization::Preserve,
+                /*details_max_lines*/ 1,
+            );
             self.request_redraw();
         } else {
             if self
@@ -10736,6 +10751,23 @@ impl ChatWidget {
 
     pub(crate) fn thread_name(&self) -> Option<String> {
         self.thread_name.clone()
+    }
+
+    pub(crate) fn is_task_running(&self) -> bool {
+        self.bottom_pane.is_task_running()
+    }
+
+    pub(crate) fn terminal_title_focus(&self) -> Option<TerminalTitleFocus> {
+        self.bottom_pane.terminal_title_focus()
+    }
+
+    pub(crate) fn terminal_title_status(&self) -> Option<String> {
+        let status = self.current_status.header.trim();
+        if status.is_empty() {
+            None
+        } else {
+            Some(status.to_string())
+        }
     }
 
     /// Returns the current thread's precomputed rollout path.
