@@ -6477,11 +6477,11 @@ impl CodexMessageProcessor {
             return;
         }
 
+        let thread_config = thread.config_snapshot().await;
         let collaboration_modes_config = CollaborationModesConfig {
             default_mode_request_user_input: thread.enabled(Feature::DefaultModeRequestUserInput),
-            auto_mode_instructions: thread.config().auto_mode_instructions.clone(),
-            auto_mode_instructions_merge_strategy: thread
-                .config()
+            auto_mode_instructions: thread_config.auto_mode_instructions,
+            auto_mode_instructions_merge_strategy: thread_config
                 .auto_mode_instructions_merge_strategy,
         };
         let collaboration_mode = params.collaboration_mode.map(|mode| {
