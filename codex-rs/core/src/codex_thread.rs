@@ -2,6 +2,7 @@ use crate::agent::AgentStatus;
 use crate::codex::Codex;
 use crate::codex::SteerInputError;
 use crate::config::ConstraintResult;
+use crate::config::types::AutoModeInstructionsMergeStrategy;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
@@ -39,6 +40,8 @@ pub struct ThreadConfigSnapshot {
     pub cwd: PathBuf,
     pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
+    pub auto_mode_instructions: Option<String>,
+    pub auto_mode_instructions_merge_strategy: AutoModeInstructionsMergeStrategy,
     pub personality: Option<Personality>,
     pub session_source: SessionSource,
 }
