@@ -5358,7 +5358,9 @@ mod handlers {
             return;
         };
 
-        if let Err(message) = persist_thread_name(sess, &name, false).await {
+        if let Err(message) =
+            persist_thread_name(sess, &name, false, crate::rollout::ThreadNameSource::Manual).await
+        {
             let event = Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
@@ -5384,7 +5386,10 @@ mod handlers {
         let Some(name) = crate::util::normalize_thread_name(&name) else {
             return;
         };
-        if persist_thread_name(sess, &name, true).await.is_err() {
+        if persist_thread_name(sess, &name, true, crate::rollout::ThreadNameSource::Auto)
+            .await
+            .is_err()
+        {
             return;
         }
 
@@ -5402,6 +5407,7 @@ mod handlers {
         sess: &Arc<Session>,
         name: &str,
         only_if_absent: bool,
+        source: crate::rollout::ThreadNameSource,
     ) -> Result<(), String> {
         let _thread_name_guard = sess.thread_name_lock.lock().await;
 
@@ -5421,9 +5427,14 @@ mod handlers {
         }
 
         let codex_home = sess.codex_home().await;
-        session_index::append_thread_name(&codex_home, sess.conversation_id, name)
-            .await
-            .map_err(|err| format!("Failed to set thread name: {err}"))?;
+        session_index::append_thread_name_with_source(
+            &codex_home,
+            sess.conversation_id,
+            name,
+            source,
+        )
+        .await
+        .map_err(|err| format!("Failed to set thread name: {err}"))?;
 
         let mut state = sess.state.lock().await;
         if only_if_absent && state.session_configuration.thread_name.is_some() {

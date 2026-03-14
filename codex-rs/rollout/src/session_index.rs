@@ -16,11 +16,34 @@ use tokio::io::AsyncWriteExt;
 const SESSION_INDEX_FILE: &str = "session_index.jsonl";
 const READ_CHUNK_SIZE: usize = 8192;
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadNameSource {
+    #[default]
+    Auto,
+    Manual,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionIndexEntry {
     pub id: ThreadId,
     pub thread_name: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub source: ThreadNameSource,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThreadTitleState {
+    pub latest_title: Option<String>,
+    pub manual_title: Option<String>,
+    pub auto_title: Option<String>,
+}
+
+impl ThreadTitleState {
+    pub fn is_empty(&self) -> bool {
+        self.latest_title.is_none() && self.manual_title.is_none() && self.auto_title.is_none()
+    }
 }
 
 /// Append a thread name update to the session index.
@@ -29,6 +52,16 @@ pub async fn append_thread_name(
     codex_home: &Path,
     thread_id: ThreadId,
     name: &str,
+) -> std::io::Result<()> {
+    append_thread_name_with_source(codex_home, thread_id, name, ThreadNameSource::Auto).await
+}
+
+/// Append a thread name update with an explicit source classification.
+pub async fn append_thread_name_with_source(
+    codex_home: &Path,
+    thread_id: ThreadId,
+    name: &str,
+    source: ThreadNameSource,
 ) -> std::io::Result<()> {
     use time::OffsetDateTime;
     use time::format_description::well_known::Rfc3339;
@@ -40,6 +73,7 @@ pub async fn append_thread_name(
         id: thread_id,
         thread_name: name.to_string(),
         updated_at,
+        source,
     };
     append_session_index_entry(codex_home, &entry).await
 }
@@ -77,6 +111,47 @@ pub async fn find_thread_name_by_id(
         .await
         .map_err(std::io::Error::other)??;
     Ok(entry.map(|entry| entry.thread_name))
+}
+
+/// Find the latest persisted title state for a thread id.
+pub async fn find_thread_title_state_by_id(
+    codex_home: &Path,
+    thread_id: &ThreadId,
+) -> std::io::Result<ThreadTitleState> {
+    let path = session_index_path(codex_home);
+    if !path.exists() {
+        return Ok(ThreadTitleState::default());
+    }
+
+    let file = tokio::fs::File::open(&path).await?;
+    let reader = tokio::io::BufReader::new(file);
+    let mut lines = reader.lines();
+    let mut state = ThreadTitleState::default();
+
+    while let Some(line) = lines.next_line().await? {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<SessionIndexEntry>(trimmed) else {
+            continue;
+        };
+        if entry.id != *thread_id {
+            continue;
+        }
+        let title = entry.thread_name.trim();
+        if title.is_empty() {
+            continue;
+        }
+        let title = title.to_string();
+        state.latest_title = Some(title.clone());
+        match entry.source {
+            ThreadNameSource::Auto => state.auto_title = Some(title),
+            ThreadNameSource::Manual => state.manual_title = Some(title),
+        }
+    }
+
+    Ok(state)
 }
 
 /// Find the latest thread names for a batch of thread ids.

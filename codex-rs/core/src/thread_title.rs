@@ -15,18 +15,28 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort;
 use futures::StreamExt;
+use serde::Deserialize;
+use serde_json::json;
 use tracing::debug;
 use tracing::warn;
 
-const TITLE_TARGET_MAX_CHARS: usize = 24;
-const TITLE_TARGET_MIN_CHARS: usize = 13;
-const TITLE_MAX_WORDS: usize = 4;
-const PREFERRED_TITLE_MODELS: &[&str] = &[
-    "gpt-5.1-codex-mini",
-    "gpt-5-mini",
-    "gpt-5.1-mini",
-    "o4-mini",
-];
+const TITLE_MIN_WORDS: usize = 3;
+const TITLE_MAX_WORDS: usize = 7;
+const CLAUDE_TITLE_PROMPT: &str = r#"Generate a concise, sentence-case title (3-7 words) that captures the main topic or goal of this coding session. The title should be clear enough that the user recognizes the session in a list. Use sentence case: capitalize only the first word and proper nouns.
+Return JSON with a single "title" field.
+Good examples:
+{"title": "Fix login button on mobile"}
+{"title": "Add OAuth authentication"}
+{"title": "Debug failing CI tests"}
+{"title": "Refactor API client error handling"}
+Bad (too vague): {"title": "Code changes"}
+Bad (too long): {"title": "Investigate and fix the issue where the login button does not respond on mobile devices"}
+Bad (wrong case): {"title": "Fix Login Button On Mobile"}"#;
+
+#[derive(Debug, Deserialize)]
+struct GeneratedTitleResponse {
+    title: String,
+}
 
 pub(crate) async fn generate_thread_title(
     services: &SessionServices,
@@ -46,7 +56,7 @@ pub(crate) async fn generate_thread_title(
         .models_manager
         .list_models(RefreshStrategy::OnlineIfUncached)
         .await;
-    let model = select_title_model(models.as_slice())?;
+    let model = resolve_title_model(config, models.as_slice())?;
     let model_info = services
         .models_manager
         .get_model_info(model.as_str(), config)
@@ -66,21 +76,7 @@ pub(crate) async fn generate_thread_title(
     )
     .await?;
 
-    title = sanitize_generated_title(&title)?;
-    if !title_fits_constraints(&title) {
-        let repair_prompt = build_generation_prompt(format!(
-            "Rewrite this thread title so it stays in Title Case, fits within {TITLE_TARGET_MIN_CHARS}-{TITLE_TARGET_MAX_CHARS} characters, and uses at most {TITLE_MAX_WORDS} words. Output ONLY the rewritten title.\nCurrent title: {title}\nOriginal request: {prompt_text}"
-        ));
-        title = sanitize_generated_title(
-            &collect_model_text(
-                &mut client_session,
-                &repair_prompt,
-                &model_info,
-                &services.session_telemetry,
-            )
-            .await?,
-        )?;
-    }
+    title = parse_generated_title(&title)?;
 
     if !title_fits_constraints(&title) {
         warn!("thread title generator produced an invalid title: {title:?}");
@@ -122,7 +118,7 @@ fn build_generation_prompt(context: String) -> Prompt {
             text: title_generation_instructions(),
         },
         personality: None,
-        output_schema: None,
+        output_schema: Some(title_output_schema()),
     }
 }
 
@@ -175,22 +171,30 @@ async fn collect_model_text(
 }
 
 fn title_generation_instructions() -> String {
-    format!(
-        "Name this Codex thread in {TITLE_TARGET_MIN_CHARS}-{TITLE_TARGET_MAX_CHARS} characters. Title Case. Output ONLY the thread title.\nCapture the action and subject. Use at most {TITLE_MAX_WORDS} words. Never abbreviate words except: API, CLI, DB, TG, CI, UI.\n\n\"turn on the living room lights\" -> \"Turn On Lights\"\n\"Check emails about Eight Sleep\" -> \"8 Sleep Emails\"\n\"Update agents.md for SuperWhisper\" -> \"Whisper Vocab\"\n\"the light automations aren't working\" -> \"Fix Light Sched\"\n\"how should i configure tailscale\" -> \"Config Tailscale\"\n\"Ensure changes applied and /ship\" -> \"Ship All Changes\"\n\"why does opensea show generic icon\" -> \"Fix OpenSea Icon\"\n\"fix: Time Machine Backup Status\" -> \"Fix TM Backup\"\n\"Give me Amazon links\" -> \"Amazon Links\"\n\"connect tesla to iphone hotspot\" -> \"Tesla Hotspot\"\n\"abandon work on the play feature\" -> \"Revert Play Work\""
-    )
+    CLAUDE_TITLE_PROMPT.to_string()
 }
 
-fn select_title_model(models: &[ModelPreset]) -> Option<String> {
-    for preferred in PREFERRED_TITLE_MODELS {
-        if models.iter().any(|model| model.model == *preferred) {
-            return Some((*preferred).to_string());
+fn title_output_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title"],
+        "properties": {
+            "title": {
+                "type": "string"
+            }
         }
-    }
-    if let Some(model) = models
-        .iter()
-        .find(|model| model.model.contains("mini") || model.model.contains("nano"))
+    })
+}
+
+fn resolve_title_model(config: &Config, models: &[ModelPreset]) -> Option<String> {
+    if let Some(model) = config
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
     {
-        return Some(model.model.clone());
+        return Some(model.to_string());
     }
     models
         .iter()
@@ -200,8 +204,27 @@ fn select_title_model(models: &[ModelPreset]) -> Option<String> {
 }
 
 fn title_fits_constraints(title: &str) -> bool {
+    let word_count = title.split_whitespace().count();
     let len = title.chars().count();
-    len >= 3 && len <= TITLE_TARGET_MAX_CHARS && title.split_whitespace().count() <= TITLE_MAX_WORDS
+    len >= 3 && (TITLE_MIN_WORDS..=TITLE_MAX_WORDS).contains(&word_count)
+}
+
+fn parse_generated_title(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let parsed = parse_title_response(raw)
+        .or_else(|| {
+            let start = raw.find('{')?;
+            let end = raw.rfind('}')?;
+            parse_title_response(&raw[start..=end])
+        })
+        .unwrap_or_else(|| raw.to_string());
+    sanitize_generated_title(&parsed)
+}
+
+fn parse_title_response(raw: &str) -> Option<String> {
+    serde_json::from_str::<GeneratedTitleResponse>(raw)
+        .ok()
+        .map(|response| response.title)
 }
 
 fn sanitize_generated_title(title: &str) -> Option<String> {
@@ -283,6 +306,7 @@ fn is_low_signal_prompt(prompt: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::test_config;
     use codex_protocol::openai_models::ReasoningEffortPreset;
 
     fn preset(model: &str, is_default: bool) -> ModelPreset {
@@ -329,25 +353,39 @@ mod tests {
     }
 
     #[test]
-    fn select_title_model_prefers_mini_candidates() {
-        let models = vec![preset("gpt-5.4", true), preset("gpt-5.1-codex-mini", false)];
+    fn resolve_title_model_prefers_configured_model() {
+        let mut config = test_config();
+        config.model = Some("gpt-5.4".to_string());
+        let models = vec![preset("gpt-5.1-codex-mini", true)];
         assert_eq!(
-            select_title_model(&models).as_deref(),
-            Some("gpt-5.1-codex-mini")
+            resolve_title_model(&config, &models).as_deref(),
+            Some("gpt-5.4")
         );
     }
 
     #[test]
-    fn select_title_model_falls_back_to_default() {
+    fn resolve_title_model_falls_back_to_default() {
+        let config = test_config();
         let models = vec![preset("gpt-5.4", true), preset("gpt-5.3-codex", false)];
-        assert_eq!(select_title_model(&models).as_deref(), Some("gpt-5.4"));
+        assert_eq!(
+            resolve_title_model(&config, &models).as_deref(),
+            Some("gpt-5.4")
+        );
+    }
+
+    #[test]
+    fn parse_generated_title_extracts_json_payload() {
+        assert_eq!(
+            parse_generated_title("{\"title\":\"Fix login button on mobile\"}").as_deref(),
+            Some("Fix login button on mobile")
+        );
     }
 
     #[test]
     fn sanitize_generated_title_strips_quotes_and_period() {
         assert_eq!(
-            sanitize_generated_title("\"Fix Title Flow.\"").as_deref(),
-            Some("Fix Title Flow")
+            sanitize_generated_title("\"Fix login button on mobile.\"").as_deref(),
+            Some("Fix login button on mobile")
         );
     }
 
