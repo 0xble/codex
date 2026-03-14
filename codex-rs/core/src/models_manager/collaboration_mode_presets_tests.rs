@@ -8,10 +8,12 @@ fn preset_names_use_mode_display_names() {
         default_preset(CollaborationModesConfig::default()).name,
         ModeKind::Default.display_name()
     );
+    assert_eq!(auto_preset().name, ModeKind::Auto.display_name());
     assert_eq!(
         plan_preset().reasoning_effort,
         Some(Some(ReasoningEffort::Medium))
     );
+    assert_eq!(auto_preset().reasoning_effort, None);
 }
 
 #[test]
@@ -48,4 +50,20 @@ fn default_mode_instructions_use_plain_text_questions_when_feature_disabled() {
     assert!(
         default_instructions.contains("ask the user directly with a concise plain-text question")
     );
+}
+
+#[test]
+fn auto_mode_instructions_replace_mode_names_placeholder() {
+    let auto_instructions = auto_preset()
+        .developer_instructions
+        .expect("auto preset should include instructions")
+        .expect("auto instructions should be set");
+
+    assert!(!auto_instructions.contains(KNOWN_MODE_NAMES_PLACEHOLDER));
+
+    let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
+    let expected_snippet = format!("Known mode names are {known_mode_names}.");
+    assert!(auto_instructions.contains(&expected_snippet));
+    assert!(auto_instructions.contains("Work until the task is complete."));
+    assert!(auto_instructions.contains("`request_user_input` tool is unavailable in Auto mode."));
 }

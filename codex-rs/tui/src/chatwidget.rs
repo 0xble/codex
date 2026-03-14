@@ -1916,6 +1916,31 @@ impl ChatWidget {
         });
     }
 
+    fn current_permissions_are_full_access(&self) -> bool {
+        let current_approval = self.config.permissions.approval_policy.value();
+        let current_sandbox = self.config.permissions.sandbox_policy.get();
+        builtin_approval_presets()
+            .into_iter()
+            .find(|preset| preset.id == "full-access")
+            .is_some_and(|preset| {
+                Self::preset_matches_current(current_approval, current_sandbox, &preset)
+            })
+    }
+
+    fn maybe_warn_auto_mode_permissions(&mut self, previous_mode: ModeKind, next_mode: ModeKind) {
+        if previous_mode == ModeKind::Auto || next_mode != ModeKind::Auto {
+            return;
+        }
+        if self.current_permissions_are_full_access() {
+            return;
+        }
+
+        self.on_warning(
+            "Auto mode may be constrained by current permissions. You are not in Full Access, so Auto may still stop for approval requests or sandbox limits."
+                .to_string(),
+        );
+    }
+
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         match info {
             Some(info) => self.apply_token_info(info),
@@ -2302,16 +2327,25 @@ impl ChatWidget {
                 .map(|pending| pending.user_message.clone())
                 .collect(),
             queued_user_messages: self.queued_user_messages.clone(),
-            current_collaboration_mode: self.current_collaboration_mode.clone(),
-            active_collaboration_mask: self.active_collaboration_mask.clone(),
+            current_collaboration_mode: Self::normalize_persisted_collaboration_mode(
+                self.current_collaboration_mode.clone(),
+            ),
+            active_collaboration_mask: self
+                .active_collaboration_mask
+                .clone()
+                .filter(|mask| mask.mode != Some(ModeKind::Auto)),
             agent_turn_running: self.agent_turn_running,
         })
     }
 
     pub(crate) fn restore_thread_input_state(&mut self, input_state: Option<ThreadInputState>) {
         if let Some(input_state) = input_state {
-            self.current_collaboration_mode = input_state.current_collaboration_mode;
-            self.active_collaboration_mask = input_state.active_collaboration_mask;
+            self.current_collaboration_mode = Self::normalize_persisted_collaboration_mode(
+                input_state.current_collaboration_mode,
+            );
+            self.active_collaboration_mask = input_state
+                .active_collaboration_mask
+                .filter(|mask| mask.mode != Some(ModeKind::Auto));
             self.agent_turn_running = input_state.agent_turn_running;
             self.update_collaboration_mode_indicator();
             self.refresh_model_display();
@@ -4436,6 +4470,25 @@ impl ChatWidget {
                     self.add_info_message("Plan mode unavailable right now.".to_string(), None);
                 }
             }
+            SlashCommand::Auto => {
+                if !self.collaboration_modes_enabled() {
+                    self.add_info_message(
+                        "Collaboration modes are disabled.".to_string(),
+                        Some("Enable collaboration modes to use /auto.".to_string()),
+                    );
+                    return;
+                }
+                let target_mask = if self.active_mode_kind() == ModeKind::Auto {
+                    collaboration_modes::default_mode_mask(self.models_manager.as_ref())
+                } else {
+                    collaboration_modes::auto_mask(self.models_manager.as_ref())
+                };
+                if let Some(mask) = target_mask {
+                    self.set_collaboration_mask(mask);
+                } else {
+                    self.add_info_message("Auto mode unavailable right now.".to_string(), None);
+                }
+            }
             SlashCommand::Collab => {
                 if !self.collaboration_modes_enabled() {
                     self.add_info_message(
@@ -4752,6 +4805,9 @@ impl ChatWidget {
                 } else {
                     self.queue_user_message(user_message);
                 }
+            }
+            SlashCommand::Auto if !trimmed.is_empty() => {
+                self.add_error_message("Usage: /auto".to_string());
             }
             SlashCommand::Review if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) =
@@ -5943,6 +5999,13 @@ impl ChatWidget {
                     "Fast on".to_string()
                 } else {
                     "Fast off".to_string()
+                },
+            ),
+            StatusLineItem::AutoMode => Some(
+                if self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Auto {
+                    "Auto on".to_string()
+                } else {
+                    "Auto off".to_string()
                 },
             ),
         }
@@ -8168,6 +8231,15 @@ impl ChatWidget {
             .unwrap_or(ModeKind::Default)
     }
 
+    fn normalize_persisted_collaboration_mode(
+        mut collaboration_mode: CollaborationMode,
+    ) -> CollaborationMode {
+        if collaboration_mode.mode == ModeKind::Auto {
+            collaboration_mode.mode = ModeKind::Default;
+        }
+        collaboration_mode
+    }
+
     fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
         if !self.collaboration_modes_enabled() {
             return self.current_collaboration_mode.reasoning_effort();
@@ -8222,6 +8294,7 @@ impl ChatWidget {
         }
         match self.active_mode_kind() {
             ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
+            ModeKind::Auto => Some(CollaborationModeIndicator::Auto),
             ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => None,
         }
     }
@@ -8247,16 +8320,19 @@ impl ChatWidget {
         }
     }
 
-    /// Cycle to the next collaboration mode variant (Plan -> Default -> Plan).
+    /// Cycle to the next collaboration mode variant (Default -> Plan -> Auto -> Default).
     fn cycle_collaboration_mode(&mut self) {
         if !self.collaboration_modes_enabled() {
             return;
         }
 
-        if let Some(next_mask) = collaboration_modes::next_mask(
-            self.models_manager.as_ref(),
-            self.active_collaboration_mask.as_ref(),
-        ) {
+        let current_mask = self
+            .active_collaboration_mask
+            .clone()
+            .or_else(|| collaboration_modes::default_mode_mask(self.models_manager.as_ref()));
+        if let Some(next_mask) =
+            collaboration_modes::next_mask(self.models_manager.as_ref(), current_mask.as_ref())
+        {
             self.set_collaboration_mask(next_mask);
         }
     }
@@ -8281,6 +8357,7 @@ impl ChatWidget {
         self.update_collaboration_mode_indicator();
         self.refresh_model_display();
         let next_mode = self.active_mode_kind();
+        self.maybe_warn_auto_mode_permissions(previous_mode, next_mode);
         let next_model = self.current_model();
         let next_effort = self.effective_reasoning_effort();
         if previous_mode != next_mode

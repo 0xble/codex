@@ -6,6 +6,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 const COLLABORATION_MODE_PLAN: &str = include_str!("../../templates/collaboration_mode/plan.md");
 const COLLABORATION_MODE_DEFAULT: &str =
     include_str!("../../templates/collaboration_mode/default.md");
+const COLLABORATION_MODE_AUTO: &str = include_str!("../../templates/collaboration_mode/auto.md");
 const KNOWN_MODE_NAMES_PLACEHOLDER: &str = "{{KNOWN_MODE_NAMES}}";
 const REQUEST_USER_INPUT_AVAILABILITY_PLACEHOLDER: &str = "{{REQUEST_USER_INPUT_AVAILABILITY}}";
 const ASKING_QUESTIONS_GUIDANCE_PLACEHOLDER: &str = "{{ASKING_QUESTIONS_GUIDANCE}}";
@@ -24,7 +25,11 @@ pub struct CollaborationModesConfig {
 pub(crate) fn builtin_collaboration_mode_presets(
     collaboration_modes_config: CollaborationModesConfig,
 ) -> Vec<CollaborationModeMask> {
-    vec![plan_preset(), default_preset(collaboration_modes_config)]
+    vec![
+        default_preset(collaboration_modes_config),
+        plan_preset(),
+        auto_preset(),
+    ]
 }
 
 fn plan_preset() -> CollaborationModeMask {
@@ -47,6 +52,16 @@ fn default_preset(collaboration_modes_config: CollaborationModesConfig) -> Colla
     }
 }
 
+fn auto_preset() -> CollaborationModeMask {
+    CollaborationModeMask {
+        name: ModeKind::Auto.display_name().to_string(),
+        mode: Some(ModeKind::Auto),
+        model: None,
+        reasoning_effort: None,
+        developer_instructions: Some(Some(auto_mode_instructions())),
+    }
+}
+
 fn default_mode_instructions(collaboration_modes_config: CollaborationModesConfig) -> String {
     let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
     let request_user_input_availability = request_user_input_availability_message(
@@ -66,6 +81,11 @@ fn default_mode_instructions(collaboration_modes_config: CollaborationModesConfi
             ASKING_QUESTIONS_GUIDANCE_PLACEHOLDER,
             &asking_questions_guidance,
         )
+}
+
+fn auto_mode_instructions() -> String {
+    let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
+    COLLABORATION_MODE_AUTO.replace(KNOWN_MODE_NAMES_PLACEHOLDER, &known_mode_names)
 }
 
 fn format_mode_names(modes: &[ModeKind]) -> String {
