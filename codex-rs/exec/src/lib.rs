@@ -2294,6 +2294,126 @@ mod tests {
     }
 
     #[test]
+    fn review_ended_abort_reports_ended_without_output() {
+        assert!(matches!(
+            review_status_for_abort_reason(&codex_protocol::protocol::TurnAbortReason::ReviewEnded),
+            ReviewLifecycleStatus::EndedWithoutOutput
+        ));
+    }
+
+    #[test]
+    fn try_parse_review_output_event_returns_none_for_missing_output() {
+        assert!(try_parse_review_output_event("not json").is_none());
+    }
+
+    #[test]
+    fn interrupted_abort_reports_interrupted() {
+        assert!(matches!(
+            review_status_for_abort_reason(&codex_protocol::protocol::TurnAbortReason::Interrupted),
+            ReviewLifecycleStatus::Interrupted
+        ));
+    }
+
+    #[test]
+    fn replaced_abort_reports_interrupted() {
+        assert!(matches!(
+            review_status_for_abort_reason(&codex_protocol::protocol::TurnAbortReason::Replaced),
+            ReviewLifecycleStatus::Interrupted
+        ));
+    }
+
+    #[test]
+    fn lagged_event_warning_message_is_explicit() {
+        assert_eq!(
+            lagged_event_warning_message(7),
+            "in-process app-server event stream lagged; dropped 7 events".to_string()
+        );
+    }
+
+    #[test]
+    fn decode_legacy_notification_preserves_conversation_id() {
+        let decoded = decode_legacy_notification(JSONRPCNotification {
+            method: "codex/event/error".to_string(),
+            params: Some(serde_json::json!({
+                "conversationId": "thread-123",
+                "msg": {
+                    "message": "boom"
+                }
+            })),
+        })
+        .expect("legacy notification should decode");
+
+        assert_eq!(decoded.conversation_id.as_deref(), Some("thread-123"));
+        assert!(matches!(
+            decoded.event.msg,
+            EventMsg::Error(codex_protocol::protocol::ErrorEvent {
+                message,
+                codex_error_info: None,
+            }) if message == "boom"
+        ));
+    }
+
+    #[test]
+    fn canceled_mcp_server_elicitation_response_uses_cancel_action() {
+        let value = canceled_mcp_server_elicitation_response()
+            .expect("mcp elicitation cancel response should serialize");
+        let response: McpServerElicitationRequestResponse =
+            serde_json::from_value(value).expect("cancel response should deserialize");
+
+        assert_eq!(
+            response,
+            McpServerElicitationRequestResponse {
+                action: McpServerElicitationAction::Cancel,
+                content: None,
+                meta: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_start_params_include_review_policy_when_review_policy_is_manual_only() {
+        let codex_home = tempdir().expect("create temp codex home");
+        let cwd = tempdir().expect("create temp cwd");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(cwd.path().to_path_buf()))
+            .build()
+            .await
+            .expect("build default config");
+
+        let params = thread_start_params_from_config(&config, None);
+
+        assert_eq!(
+            params.approvals_reviewer,
+            Some(codex_app_server_protocol::ApprovalsReviewer::User)
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_start_params_include_review_policy_when_auto_review_is_enabled() {
+        let codex_home = tempdir().expect("create temp codex home");
+        let cwd = tempdir().expect("create temp cwd");
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            "approvals_reviewer = \"guardian_subagent\"\n",
+        )
+        .expect("write auto-review config");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(cwd.path().to_path_buf()))
+            .build()
+            .await
+            .expect("build auto-review config");
+
+        let params = thread_start_params_from_config(&config, None);
+
+        assert_eq!(
+            params.approvals_reviewer,
+            Some(codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent)
+        );
+    }
+
+    #[test]
     fn session_configured_from_thread_response_uses_review_policy_from_response() {
         let response = ThreadStartResponse {
             thread: codex_app_server_protocol::Thread {
