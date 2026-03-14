@@ -292,6 +292,13 @@
         }
       ]
     },
+    "AutoModeInstructionsMergeStrategy": {
+      "enum": [
+        "replace",
+        "append"
+      ],
+      "type": "string"
+    },
     "BundledSkillsConfig": {
       "additionalProperties": false,
       "properties": {
@@ -314,6 +321,12 @@
         },
         "approvals_reviewer": {
           "$ref": "#/definitions/ApprovalsReviewer"
+        },
+        "auto_mode_instructions": {
+          "type": "string"
+        },
+        "auto_mode_instructions_merge_strategy": {
+          "$ref": "#/definitions/AutoModeInstructionsMergeStrategy"
         },
         "chatgpt_base_url": {
           "type": "string"
@@ -1805,6 +1818,12 @@
       ],
       "default": null,
       "description": "Machine-local realtime audio device preferences used by realtime voice."
+    },
+    "auto_mode_instructions": {
+      "type": "string"
+    },
+    "auto_mode_instructions_merge_strategy": {
+      "$ref": "#/definitions/AutoModeInstructionsMergeStrategy"
     },
     "background_terminal_max_timeout": {
       "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `300000` (5 minutes).",

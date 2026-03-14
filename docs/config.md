@@ -82,6 +82,17 @@ sandbox limits may still interrupt execution.
 The TUI status line also supports an `auto-mode` item, which renders as
 `Auto on` or `Auto off`.
 
+`auto_mode_instructions` lets you override the built-in Auto-mode developer
+instructions from config. `auto_mode_instructions_merge_strategy` controls how
+the override is applied:
+
+- `replace`: use only your configured Auto instructions.
+- `append`: keep the built-in Auto instructions and append your custom
+  instructions after them.
+
+When `auto_mode_instructions` is unset, Codex uses the built-in Auto
+instructions regardless of merge strategy.
+
 ## Realtime start instructions
 
 `experimental_realtime_start_instructions` lets you replace the built-in
