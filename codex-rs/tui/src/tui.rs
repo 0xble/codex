@@ -1,10 +1,19 @@
 use std::fmt;
+#[cfg(unix)]
+use std::fs::OpenOptions;
 use std::future::Future;
 use std::io::IsTerminal;
+#[cfg(unix)]
+use std::io::Read;
 use std::io::Result;
 use std::io::Stdout;
+use std::io::Write;
 use std::io::stdin;
 use std::io::stdout;
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::panic;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -12,6 +21,8 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
@@ -61,6 +72,8 @@ pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
 const DEFAULT_TERMINAL_TITLE: &str = "Codex";
 const TERMINAL_TITLE_DISABLE_ENV: &str = "CODEX_DISABLE_TERMINAL_TITLE";
+#[cfg(unix)]
+const TERMINAL_TITLE_QUERY_TIMEOUT: Duration = Duration::from_millis(50);
 static TERMINAL_TITLE_SAVED: AtomicBool = AtomicBool::new(false);
 static TERMINAL_TITLE_CURRENT: Mutex<Option<String>> = Mutex::new(None);
 
@@ -80,28 +93,37 @@ fn set_process_terminal_title(title: Option<String>) {
 fn write_process_terminal_title(
     writer: &mut impl std::io::Write,
     transport: TerminalTitleTransport,
+    preexisting_title: Option<&str>,
     context: Option<&str>,
 ) -> Result<()> {
     let mut current = TERMINAL_TITLE_CURRENT
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    write_terminal_title(writer, &mut current, transport, context)
+    write_terminal_title(writer, &mut current, transport, preexisting_title, context)
 }
 
-fn format_terminal_title(context: Option<&str>) -> String {
-    let context = context
-        .map(|text| {
-            text.chars()
-                .filter(|c| !c.is_control())
-                .collect::<String>()
-                .trim()
-                .to_string()
-        })
-        .filter(|text| !text.is_empty());
+fn sanitize_terminal_title_component(text: &str) -> Option<String> {
+    let text = text
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .trim()
+        .to_string();
 
-    match context {
-        Some(context) => context,
-        None => DEFAULT_TERMINAL_TITLE.to_string(),
+    if text.is_empty() { None } else { Some(text) }
+}
+
+fn format_terminal_title(context: Option<&str>, preexisting_title: Option<&str>) -> String {
+    let codex_title = context
+        .and_then(sanitize_terminal_title_component)
+        .unwrap_or_else(|| DEFAULT_TERMINAL_TITLE.to_string());
+    let preexisting_title = preexisting_title
+        .and_then(sanitize_terminal_title_component)
+        .filter(|title| title != &codex_title);
+
+    match preexisting_title {
+        Some(preexisting_title) => format!("{preexisting_title} | {codex_title}"),
+        None => codex_title,
     }
 }
 
@@ -109,9 +131,10 @@ fn write_terminal_title(
     writer: &mut impl std::io::Write,
     current_title: &mut Option<String>,
     transport: TerminalTitleTransport,
+    preexisting_title: Option<&str>,
     context: Option<&str>,
 ) -> Result<()> {
-    let title = format_terminal_title(context);
+    let title = format_terminal_title(context, preexisting_title);
     if current_title.as_ref() == Some(&title) {
         return Ok(());
     }
@@ -160,6 +183,94 @@ fn restore_saved_terminal_title_best_effort() {
 
 fn clear_process_terminal_title() {
     set_process_terminal_title(None);
+}
+
+#[cfg(unix)]
+fn parse_terminal_title_response(response: &[u8]) -> Option<String> {
+    let start = response.windows(3).position(|window| window == b"\x1b]l")? + 3;
+    let payload = &response[start..];
+    let bel_end = payload.iter().position(|&byte| byte == b'\x07');
+    let st_end = payload.windows(2).position(|window| window == b"\x1b\\");
+    let end = match (bel_end, st_end) {
+        (Some(bel_end), Some(st_end)) => bel_end.min(st_end),
+        (Some(bel_end), None) => bel_end,
+        (None, Some(st_end)) => st_end,
+        (None, None) => return None,
+    };
+
+    Some(String::from_utf8_lossy(&payload[..end]).into_owned())
+}
+
+#[cfg(unix)]
+fn query_preexisting_terminal_title(transport: Option<TerminalTitleTransport>) -> Option<String> {
+    if !matches!(transport, Some(TerminalTitleTransport::Direct))
+        || !stdin().is_terminal()
+        || !stdout().is_terminal()
+    {
+        return None;
+    }
+
+    let mut tty = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open("/dev/tty")
+        .ok()?;
+
+    tty.write_all(b"\x1b[21t").ok()?;
+    tty.flush().ok()?;
+
+    let deadline = Instant::now() + TERMINAL_TITLE_QUERY_TIMEOUT;
+    let mut response = Vec::new();
+
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+
+        let timeout_ms = remaining.as_millis().min(i32::MAX as u128) as i32;
+        let mut pollfd = libc::pollfd {
+            fd: tty.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let poll_result = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+        if poll_result == 0 {
+            break;
+        }
+        if poll_result < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return None;
+        }
+
+        let mut chunk = [0u8; 256];
+        loop {
+            match tty.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(bytes_read) => {
+                    response.extend_from_slice(&chunk[..bytes_read]);
+                    if let Some(title) = parse_terminal_title_response(&response) {
+                        return sanitize_terminal_title_component(&title);
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => return None,
+            }
+        }
+    }
+
+    parse_terminal_title_response(&response)
+        .and_then(|title| sanitize_terminal_title_component(&title))
+}
+
+#[cfg(not(unix))]
+fn query_preexisting_terminal_title(_transport: Option<TerminalTitleTransport>) -> Option<String> {
+    None
 }
 
 fn terminal_title_transport_for_env(
@@ -397,13 +508,20 @@ pub struct Tui {
     terminal_title_enabled: bool,
     terminal_title_transport: Option<TerminalTitleTransport>,
     terminal_title_restore_supported: bool,
+    preexisting_terminal_title: Option<String>,
 }
 
 impl Tui {
     pub fn new(terminal: Terminal) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
         let frame_requester = FrameRequester::new(draw_tx.clone());
+        let terminal_title_enabled = terminal_title_enabled();
         let terminal_title_transport = terminal_title_transport();
+        let preexisting_terminal_title = if terminal_title_enabled {
+            query_preexisting_terminal_title(terminal_title_transport)
+        } else {
+            None
+        };
 
         // Detect keyboard enhancement support before any EventStream is created so the
         // crossterm poller can acquire its lock without contention.
@@ -426,11 +544,12 @@ impl Tui {
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             alt_screen_enabled: true,
-            terminal_title_enabled: terminal_title_enabled(),
+            terminal_title_enabled,
             terminal_title_transport,
             terminal_title_restore_supported: terminal_title_restore_supported(
                 terminal_title_transport,
             ),
+            preexisting_terminal_title,
         }
     }
 
@@ -458,7 +577,12 @@ impl Tui {
             TERMINAL_TITLE_SAVED.store(true, Ordering::Relaxed);
         }
 
-        write_process_terminal_title(backend, transport, context)
+        write_process_terminal_title(
+            backend,
+            transport,
+            self.preexisting_terminal_title.as_deref(),
+            context,
+        )
     }
 
     pub fn restore_title(&mut self) -> Result<()> {
@@ -735,6 +859,8 @@ mod tests {
     use super::TERMINAL_TITLE_SAVED;
     use super::TerminalTitleTransport;
     use super::format_terminal_title;
+    #[cfg(unix)]
+    use super::parse_terminal_title_response;
     use super::restore_saved_terminal_title;
     use super::terminal_title_disabled;
     use super::terminal_title_restore_supported;
@@ -745,23 +871,26 @@ mod tests {
 
     #[test]
     fn terminal_title_defaults_to_codex() {
-        assert_eq!(format_terminal_title(None), DEFAULT_TERMINAL_TITLE);
-        assert_eq!(format_terminal_title(Some("   ")), DEFAULT_TERMINAL_TITLE);
+        assert_eq!(format_terminal_title(None, None), DEFAULT_TERMINAL_TITLE);
+        assert_eq!(
+            format_terminal_title(Some("   "), None),
+            DEFAULT_TERMINAL_TITLE
+        );
     }
 
     #[test]
     fn terminal_title_includes_context() {
         assert_eq!(
-            format_terminal_title(Some("fix title syncing")),
+            format_terminal_title(Some("fix title syncing"), None),
             "fix title syncing"
         );
     }
 
     #[test]
     fn terminal_title_preserves_spinner_prefixed_context() {
-        assert_eq!(format_terminal_title(Some("⠋ Codex")), "⠋ Codex");
+        assert_eq!(format_terminal_title(Some("⠋ Codex"), None), "⠋ Codex");
         assert_eq!(
-            format_terminal_title(Some("⠋ named thread")),
+            format_terminal_title(Some("⠋ named thread"), None),
             "⠋ named thread"
         );
     }
@@ -769,9 +898,27 @@ mod tests {
     #[test]
     fn terminal_title_strips_control_characters() {
         assert_eq!(
-            format_terminal_title(Some("hello\x1b\t\n\r\u{7}world")),
+            format_terminal_title(Some("hello\x1b\t\n\r\u{7}world"), None),
             "helloworld"
         );
+    }
+
+    #[test]
+    fn terminal_title_appends_preexisting_title() {
+        assert_eq!(
+            format_terminal_title(Some("⠋ Codex"), Some("Terminal Title")),
+            "Terminal Title | ⠋ Codex"
+        );
+        assert_eq!(
+            format_terminal_title(None, Some("Terminal Title")),
+            "Terminal Title | Codex"
+        );
+    }
+
+    #[test]
+    fn terminal_title_ignores_empty_or_duplicate_preexisting_title() {
+        assert_eq!(format_terminal_title(Some("plan"), Some("   ")), "plan");
+        assert_eq!(format_terminal_title(Some("plan"), Some("plan")), "plan");
     }
 
     #[test]
@@ -783,6 +930,7 @@ mod tests {
             &mut output,
             &mut current_title,
             TerminalTitleTransport::Direct,
+            None,
             Some("plan"),
         )
         .expect("first title write should succeed");
@@ -790,6 +938,7 @@ mod tests {
             &mut output,
             &mut current_title,
             TerminalTitleTransport::Direct,
+            None,
             Some("plan"),
         )
         .expect("duplicate title write should succeed");
@@ -807,12 +956,29 @@ mod tests {
             &mut output,
             &mut current_title,
             TerminalTitleTransport::TmuxPassthrough,
+            Some("Terminal Title"),
             Some("plan"),
         )
         .expect("tmux title write should succeed");
 
-        assert_eq!(output, b"\x1bPtmux;\x1b\x1b]0;plan\x07\x1b\\");
-        assert_eq!(current_title, Some("plan".to_string()));
+        assert_eq!(
+            output,
+            b"\x1bPtmux;\x1b\x1b]0;Terminal Title | plan\x07\x1b\\"
+        );
+        assert_eq!(current_title, Some("Terminal Title | plan".to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_title_query_parser_accepts_st_and_bel_terminators() {
+        assert_eq!(
+            parse_terminal_title_response(b"\x1b]lTerminal Title\x1b\\"),
+            Some("Terminal Title".to_string())
+        );
+        assert_eq!(
+            parse_terminal_title_response(b"\x1b]lTerminal Title\x07"),
+            Some("Terminal Title".to_string())
+        );
     }
 
     #[test]
