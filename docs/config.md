@@ -89,9 +89,6 @@ automatically in later sessions. When Auto is selected without Full Access
 permissions, Codex shows a non-blocking warning because approval prompts or
 sandbox limits may still interrupt execution.
 
-The TUI status line also supports an `auto-mode` item, which renders as
-`Auto on` or `Auto off`.
-
 `auto_mode_instructions` lets you override the built-in Auto-mode developer
 instructions from config. `auto_mode_instructions_merge_strategy` controls how
 the override is applied:
