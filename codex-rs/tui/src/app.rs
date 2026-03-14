@@ -958,6 +958,7 @@ fn normalize_title_segment(segment: Option<String>) -> Option<String> {
 fn compute_title_context(
     thread_name: Option<String>,
     persisted_thread_name: Option<String>,
+    work_hint: Option<String>,
     status_header: Option<String>,
     focus: Option<TerminalTitleFocus>,
     task_running: bool,
@@ -965,7 +966,8 @@ fn compute_title_context(
     tick: u128,
 ) -> Option<String> {
     let identity = normalize_title_segment(thread_name)
-        .or_else(|| normalize_title_segment(persisted_thread_name));
+        .or_else(|| normalize_title_segment(persisted_thread_name))
+        .or_else(|| normalize_title_segment(work_hint));
     let status = normalize_title_segment(status_header)
         .filter(|status| !status.eq_ignore_ascii_case("working"));
     if !task_running {
@@ -1000,6 +1002,7 @@ async fn update_terminal_title(tui: &mut tui::Tui, app: &mut App) -> Result<()> 
     let title_context = compute_title_context(
         app.chat_widget.thread_name(),
         app.refresh_persisted_thread_name(task_running).await,
+        app.chat_widget.terminal_title_work_hint(),
         app.chat_widget.terminal_title_status(),
         app.chat_widget.terminal_title_focus(),
         task_running,
@@ -6555,6 +6558,7 @@ mod tests {
             compute_title_context(
                 Some("thread name".to_string()),
                 Some("persisted title".to_string()),
+                Some("draft focus".to_string()),
                 Some("Reviewing".to_string()),
                 Some(TerminalTitleFocus::Permissions),
                 true,
@@ -6571,6 +6575,7 @@ mod tests {
             compute_title_context(
                 Some("thread name".to_string()),
                 Some("persisted title".to_string()),
+                Some("draft focus".to_string()),
                 Some("Reviewing".to_string()),
                 None,
                 true,
@@ -6587,6 +6592,7 @@ mod tests {
             compute_title_context(
                 Some("named thread".to_string()),
                 Some("persisted title".to_string()),
+                Some("draft focus".to_string()),
                 Some("Working".to_string()),
                 Some(TerminalTitleFocus::Approval),
                 false,
@@ -6599,6 +6605,7 @@ mod tests {
             compute_title_context(
                 None,
                 Some("persisted title".to_string()),
+                Some("draft focus".to_string()),
                 None,
                 None,
                 false,
@@ -6615,6 +6622,7 @@ mod tests {
             compute_title_context(
                 Some("named thread".to_string()),
                 None,
+                Some("draft focus".to_string()),
                 Some("Working".to_string()),
                 None,
                 true,
@@ -6628,8 +6636,25 @@ mod tests {
     #[test]
     fn title_context_falls_back_to_codex_when_running_without_any_context() {
         assert_eq!(
-            compute_title_context(None, None, None, None, true, true, 2),
+            compute_title_context(None, None, None, None, None, true, true, 2),
             Some("⠹ Codex".to_string())
+        );
+    }
+
+    #[test]
+    fn title_context_falls_back_to_submitted_work_hint_before_thread_name_exists() {
+        assert_eq!(
+            compute_title_context(
+                None,
+                None,
+                Some("Implement first-turn title update".to_string()),
+                Some("Working".to_string()),
+                None,
+                true,
+                false,
+                0,
+            ),
+            Some("Implement first-turn title update".to_string())
         );
     }
 

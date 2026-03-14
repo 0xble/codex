@@ -923,6 +923,9 @@ pub(crate) struct ChatWidget {
     current_rollout_path: Option<PathBuf>,
     // Current working directory (if known)
     current_cwd: Option<PathBuf>,
+    // Normalized preview of the most recently submitted user work, used as a
+    // terminal-title fallback before the thread name exists.
+    submitted_work_title_hint: Option<String>,
     // Runtime network proxy bind addresses from SessionConfigured.
     session_network_proxy: Option<codex_protocol::protocol::SessionNetworkProxyRuntime>,
     // Shared latch so we only warn once about invalid status-line item IDs.
@@ -4729,6 +4732,7 @@ impl ChatWidget {
             feedback,
             current_rollout_path: None,
             current_cwd,
+            submitted_work_title_hint: None,
             session_network_proxy: None,
             status_line_invalid_items_warned,
             terminal_title_invalid_items_warned,
@@ -5624,6 +5628,8 @@ impl ChatWidget {
             );
             return;
         }
+
+        self.submitted_work_title_hint = Self::work_title_hint_from_message(&text);
 
         let render_in_history = !self.agent_turn_running;
         let mut items: Vec<UserInput> = Vec::new();
@@ -10780,6 +10786,26 @@ impl ChatWidget {
             None
         } else {
             Some(status.to_string())
+        }
+    }
+
+    pub(crate) fn terminal_title_work_hint(&self) -> Option<String> {
+        self.submitted_work_title_hint.clone()
+    }
+
+    fn work_title_hint_from_message(message: &str) -> Option<String> {
+        let mut normalized = String::new();
+        for part in message.split_whitespace() {
+            if !normalized.is_empty() {
+                normalized.push(' ');
+            }
+            normalized.push_str(part);
+        }
+        let trimmed = normalized.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(truncate_text(trimmed, 60))
         }
     }
 
