@@ -5,6 +5,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::CancellationEvent;
+use crate::bottom_pane::TerminalTitleFocus;
 use crate::bottom_pane::list_selection_view::ListSelectionView;
 use crate::bottom_pane::list_selection_view::SelectionItem;
 use crate::bottom_pane::list_selection_view::SelectionViewParams;
@@ -470,6 +471,16 @@ impl BottomPaneView for ApprovalOverlay {
 
     fn is_complete(&self) -> bool {
         self.done
+    }
+
+    fn terminal_title_focus(&self) -> Option<TerminalTitleFocus> {
+        match self.current_request.as_ref()? {
+            ApprovalRequest::Permissions { .. } => Some(TerminalTitleFocus::Permissions),
+            ApprovalRequest::McpElicitation { .. } => Some(TerminalTitleFocus::McpElicitation),
+            ApprovalRequest::Exec { .. } | ApprovalRequest::ApplyPatch { .. } => {
+                Some(TerminalTitleFocus::Approval)
+            }
+        }
     }
 
     fn try_consume_approval_request(

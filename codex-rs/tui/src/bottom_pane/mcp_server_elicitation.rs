@@ -31,6 +31,7 @@ use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::ChatComposer;
 use crate::bottom_pane::ChatComposerConfig;
 use crate::bottom_pane::InputResult;
+use crate::bottom_pane::TerminalTitleFocus;
 use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::scroll_state::ScrollState;
 use crate::bottom_pane::selection_popup_common::GenericDisplayRow;
@@ -1431,6 +1432,10 @@ impl Renderable for McpServerElicitationOverlay {
 impl BottomPaneView for McpServerElicitationOverlay {
     fn prefer_esc_to_handle_key_event(&self) -> bool {
         true
+    }
+
+    fn terminal_title_focus(&self) -> Option<TerminalTitleFocus> {
+        Some(TerminalTitleFocus::McpElicitation)
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {

@@ -23,6 +23,7 @@ use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::ChatComposer;
 use crate::bottom_pane::ChatComposerConfig;
 use crate::bottom_pane::InputResult;
+use crate::bottom_pane::TerminalTitleFocus;
 use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::scroll_state::ScrollState;
 use crate::bottom_pane::selection_popup_common::GenericDisplayRow;
@@ -1264,6 +1265,10 @@ impl BottomPaneView for RequestUserInputOverlay {
 
     fn is_in_paste_burst(&self) -> bool {
         self.composer.is_in_paste_burst()
+    }
+
+    fn terminal_title_focus(&self) -> Option<TerminalTitleFocus> {
+        Some(TerminalTitleFocus::RequestUserInput)
     }
 
     fn try_consume_user_input_request(

@@ -5,6 +5,7 @@ use codex_protocol::request_user_input::RequestUserInputEvent;
 use crossterm::event::KeyEvent;
 
 use super::CancellationEvent;
+use super::TerminalTitleFocus;
 
 /// Trait implemented by every view that can be shown in the bottom pane.
 pub(crate) trait BottomPaneView: Renderable {
@@ -59,6 +60,10 @@ pub(crate) trait BottomPaneView: Renderable {
     /// give the burst time window a chance to flush.
     fn is_in_paste_burst(&self) -> bool {
         false
+    }
+
+    fn terminal_title_focus(&self) -> Option<TerminalTitleFocus> {
+        None
     }
 
     /// Try to handle approval request; return the original value if not

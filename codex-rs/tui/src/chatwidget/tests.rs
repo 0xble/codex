@@ -5199,15 +5199,83 @@ async fn unified_exec_wait_status_header_updates_on_late_command_display() {
     });
 
     assert!(chat.active_cell.is_none());
-    assert_eq!(
-        chat.current_status.header,
-        "Waiting for background terminal"
-    );
+    assert_eq!(chat.current_status.header, "Working in background");
     let status = chat
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Waiting for background terminal");
+    assert_eq!(status.header(), "Working in background");
+    assert_eq!(status.details(), Some("sleep 5"));
+}
+
+#[tokio::test]
+async fn unified_exec_wait_replaces_reasoning_header_with_background_status() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    chat.on_agent_reasoning_delta("**Analyzing** waiting on shell".to_string());
+    begin_unified_exec_startup(&mut chat, "call-wait-reasoning", "proc-1", "sleep 5");
+
+    chat.on_terminal_interaction(TerminalInteractionEvent {
+        call_id: "call-wait-reasoning".to_string(),
+        process_id: "proc-1".to_string(),
+        stdin: String::new(),
+    });
+
+    assert_eq!(chat.current_status_header, "Working in background");
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Working in background");
+    assert_eq!(status.details(), Some("sleep 5"));
+}
+
+#[tokio::test]
+async fn unified_exec_wait_allows_later_reasoning_headers() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    begin_unified_exec_startup(&mut chat, "call-wait-late-reasoning", "proc-1", "sleep 5");
+
+    chat.on_terminal_interaction(TerminalInteractionEvent {
+        call_id: "call-wait-late-reasoning".to_string(),
+        process_id: "proc-1".to_string(),
+        stdin: String::new(),
+    });
+    chat.on_agent_reasoning_delta("**Planning** follow-up".to_string());
+
+    assert_eq!(chat.current_status_header, "Planning");
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Planning");
+    assert_eq!(status.details(), Some("sleep 5"));
+}
+
+#[tokio::test]
+async fn unified_exec_wait_repeated_polls_keep_later_reasoning_header() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    begin_unified_exec_startup(&mut chat, "call-wait-repeat-reasoning", "proc-1", "sleep 5");
+
+    chat.on_terminal_interaction(TerminalInteractionEvent {
+        call_id: "call-wait-repeat-reasoning".to_string(),
+        process_id: "proc-1".to_string(),
+        stdin: String::new(),
+    });
+    chat.on_agent_reasoning_delta("**Planning** follow-up".to_string());
+    chat.on_terminal_interaction(TerminalInteractionEvent {
+        call_id: "call-wait-repeat-reasoning-2".to_string(),
+        process_id: "proc-1".to_string(),
+        stdin: String::new(),
+    });
+
+    assert_eq!(chat.current_status_header, "Planning");
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Planning");
     assert_eq!(status.details(), Some("sleep 5"));
 }
 
@@ -5219,15 +5287,12 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
 
     terminal_interaction(&mut chat, "call-wait-1a", "proc-1", "");
     terminal_interaction(&mut chat, "call-wait-1b", "proc-1", "");
-    assert_eq!(
-        chat.current_status.header,
-        "Waiting for background terminal"
-    );
+    assert_eq!(chat.current_status.header, "Working in background");
     let status = chat
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Waiting for background terminal");
+    assert_eq!(status.header(), "Working in background");
     assert_eq!(status.details(), Some("just fix"));
 
     chat.handle_codex_event(Event {
@@ -5247,7 +5312,7 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
 }
 
 #[tokio::test]
-async fn unified_exec_wait_status_renders_command_in_single_details_row_snapshot() {
+async fn unified_exec_wait_uses_short_background_header_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
     begin_unified_exec_startup(
@@ -5260,9 +5325,11 @@ async fn unified_exec_wait_status_renders_command_in_single_details_row_snapshot
     terminal_interaction(&mut chat, "call-wait-ui-stdin", "proc-ui", "");
 
     let rendered = render_bottom_popup(&chat, 48);
-    assert_snapshot!(
-        "unified_exec_wait_status_renders_command_in_single_details_row",
-        rendered
+    assert!(rendered.contains("• Working in background"));
+    assert!(rendered.contains("cargo test -p codex-core"));
+    assert!(
+        !rendered.contains("Waiting for background terminal"),
+        "rendered popup should not use the old wait copy: {rendered}"
     );
 }
 
@@ -5291,15 +5358,12 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
 
     terminal_interaction(&mut chat, "call-wait-3a", "proc-3", "pwd\n");
     terminal_interaction(&mut chat, "call-wait-3b", "proc-3", "");
-    assert_eq!(
-        chat.current_status.header,
-        "Waiting for background terminal"
-    );
+    assert_eq!(chat.current_status.header, "Working in background");
     let status = chat
         .bottom_pane
         .status_widget()
         .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Waiting for background terminal");
+    assert_eq!(status.header(), "Working in background");
     assert_eq!(status.details(), Some("just fix"));
     let pre_cells = drain_insert_history(&mut rx);
     let active_combined = pre_cells

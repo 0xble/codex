@@ -8,6 +8,7 @@ use std::io::stdout;
 use std::panic;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -58,6 +59,143 @@ pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
+const DEFAULT_TERMINAL_TITLE: &str = "Codex";
+const TERMINAL_TITLE_DISABLE_ENV: &str = "CODEX_DISABLE_TERMINAL_TITLE";
+static TERMINAL_TITLE_SAVED: AtomicBool = AtomicBool::new(false);
+static TERMINAL_TITLE_CURRENT: Mutex<Option<String>> = Mutex::new(None);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalTitleTransport {
+    Direct,
+    TmuxPassthrough,
+}
+
+fn set_process_terminal_title(title: Option<String>) {
+    let mut current = TERMINAL_TITLE_CURRENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *current = title;
+}
+
+fn write_process_terminal_title(
+    writer: &mut impl std::io::Write,
+    transport: TerminalTitleTransport,
+    context: Option<&str>,
+) -> Result<()> {
+    let mut current = TERMINAL_TITLE_CURRENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    write_terminal_title(writer, &mut current, transport, context)
+}
+
+fn format_terminal_title(context: Option<&str>) -> String {
+    let context = context
+        .map(|text| {
+            text.chars()
+                .filter(|c| !c.is_control())
+                .collect::<String>()
+                .trim()
+                .to_string()
+        })
+        .filter(|text| !text.is_empty());
+
+    match context {
+        Some(context) => context,
+        None => DEFAULT_TERMINAL_TITLE.to_string(),
+    }
+}
+
+fn write_terminal_title(
+    writer: &mut impl std::io::Write,
+    current_title: &mut Option<String>,
+    transport: TerminalTitleTransport,
+    context: Option<&str>,
+) -> Result<()> {
+    let title = format_terminal_title(context);
+    if current_title.as_ref() == Some(&title) {
+        return Ok(());
+    }
+
+    match transport {
+        TerminalTitleTransport::Direct => {
+            write!(writer, "\x1b]0;{title}\x07")?;
+        }
+        TerminalTitleTransport::TmuxPassthrough => {
+            write!(writer, "\x1bPtmux;\x1b\x1b]0;{title}\x07\x1b\\")?;
+        }
+    }
+    writer.flush()?;
+    *current_title = Some(title);
+    Ok(())
+}
+
+fn save_terminal_title(writer: &mut impl std::io::Write) -> Result<()> {
+    write!(writer, "\x1b[22;0t")?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn restore_terminal_title(writer: &mut impl std::io::Write) -> Result<()> {
+    write!(writer, "\x1b[23;0t")?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn restore_saved_terminal_title(writer: &mut impl std::io::Write) -> Result<bool> {
+    if !TERMINAL_TITLE_SAVED.swap(false, Ordering::Relaxed) {
+        return Ok(false);
+    }
+
+    restore_terminal_title(writer)?;
+    set_process_terminal_title(None);
+    Ok(true)
+}
+
+fn restore_saved_terminal_title_best_effort() {
+    let mut output = stdout();
+    if let Err(err) = restore_saved_terminal_title(&mut output) {
+        tracing::warn!("failed to restore terminal title during cleanup: {err}");
+    }
+}
+
+fn clear_process_terminal_title() {
+    set_process_terminal_title(None);
+}
+
+fn terminal_title_transport_for_env(
+    term: &str,
+    has_tmux: bool,
+    has_sty: bool,
+) -> Option<TerminalTitleTransport> {
+    if has_tmux {
+        return Some(TerminalTitleTransport::TmuxPassthrough);
+    }
+    if has_sty || term.starts_with("screen") || term.starts_with("tmux") {
+        return None;
+    }
+    Some(TerminalTitleTransport::Direct)
+}
+
+fn terminal_title_transport() -> Option<TerminalTitleTransport> {
+    let term = std::env::var("TERM").unwrap_or_default();
+    terminal_title_transport_for_env(
+        &term,
+        std::env::var_os("TMUX").is_some(),
+        std::env::var_os("STY").is_some(),
+    )
+}
+
+fn terminal_title_restore_supported(transport: Option<TerminalTitleTransport>) -> bool {
+    matches!(transport, Some(TerminalTitleTransport::Direct))
+}
+
+fn terminal_title_disabled(value: Option<&str>) -> bool {
+    matches!(value, Some("1") | Some("true") | Some("TRUE"))
+}
+
+fn terminal_title_enabled() -> bool {
+    !terminal_title_disabled(std::env::var(TERMINAL_TITLE_DISABLE_ENV).ok().as_deref())
+}
 
 pub fn set_modes() -> Result<()> {
     execute!(stdout(), EnableBracketedPaste)?;
@@ -226,8 +364,9 @@ pub fn init() -> Result<Terminal> {
 fn set_panic_hook() {
     let hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
+        restore_saved_terminal_title_best_effort();
         let _ = restore(); // ignore any errors as we are already failing
-        hook(panic_info);
+        let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| hook(panic_info)));
     }));
 }
 
@@ -255,12 +394,16 @@ pub struct Tui {
     notification_backend: Option<DesktopNotificationBackend>,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
+    terminal_title_enabled: bool,
+    terminal_title_transport: Option<TerminalTitleTransport>,
+    terminal_title_restore_supported: bool,
 }
 
 impl Tui {
     pub fn new(terminal: Terminal) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
         let frame_requester = FrameRequester::new(draw_tx.clone());
+        let terminal_title_transport = terminal_title_transport();
 
         // Detect keyboard enhancement support before any EventStream is created so the
         // crossterm poller can acquire its lock without contention.
@@ -283,6 +426,11 @@ impl Tui {
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             alt_screen_enabled: true,
+            terminal_title_enabled: terminal_title_enabled(),
+            terminal_title_transport,
+            terminal_title_restore_supported: terminal_title_restore_supported(
+                terminal_title_transport,
+            ),
         }
     }
 
@@ -293,6 +441,41 @@ impl Tui {
 
     pub fn set_notification_method(&mut self, method: NotificationMethod) {
         self.notification_backend = Some(detect_backend(method));
+    }
+
+    pub fn set_title_context(&mut self, context: Option<&str>) -> Result<()> {
+        if !self.terminal_title_enabled {
+            return Ok(());
+        }
+
+        let Some(transport) = self.terminal_title_transport else {
+            return Ok(());
+        };
+
+        let backend = self.terminal.backend_mut();
+        if self.terminal_title_restore_supported && !TERMINAL_TITLE_SAVED.load(Ordering::Relaxed) {
+            save_terminal_title(backend)?;
+            TERMINAL_TITLE_SAVED.store(true, Ordering::Relaxed);
+        }
+
+        write_process_terminal_title(backend, transport, context)
+    }
+
+    pub fn restore_title(&mut self) -> Result<()> {
+        if !self.terminal_title_enabled {
+            return Ok(());
+        }
+
+        if !self.terminal_title_restore_supported || !TERMINAL_TITLE_SAVED.load(Ordering::Relaxed) {
+            clear_process_terminal_title();
+            return Ok(());
+        }
+
+        let backend = self.terminal.backend_mut();
+        restore_terminal_title(backend)?;
+        TERMINAL_TITLE_SAVED.store(false, Ordering::Relaxed);
+        set_process_terminal_title(None);
+        Ok(())
     }
 
     pub fn frame_requester(&self) -> FrameRequester {
@@ -348,6 +531,7 @@ impl Tui {
         }
         // After the external program `f` finishes, reset terminal state and flush any buffered keypresses.
         flush_terminal_input_buffer();
+        clear_process_terminal_title();
 
         if was_alt_screen {
             let _ = self.enter_alt_screen();
@@ -542,5 +726,163 @@ impl Tui {
             }
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DEFAULT_TERMINAL_TITLE;
+    use super::TERMINAL_TITLE_SAVED;
+    use super::TerminalTitleTransport;
+    use super::format_terminal_title;
+    use super::restore_saved_terminal_title;
+    use super::terminal_title_disabled;
+    use super::terminal_title_restore_supported;
+    use super::terminal_title_transport_for_env;
+    use super::write_terminal_title;
+    use pretty_assertions::assert_eq;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn terminal_title_defaults_to_codex() {
+        assert_eq!(format_terminal_title(None), DEFAULT_TERMINAL_TITLE);
+        assert_eq!(format_terminal_title(Some("   ")), DEFAULT_TERMINAL_TITLE);
+    }
+
+    #[test]
+    fn terminal_title_includes_context() {
+        assert_eq!(
+            format_terminal_title(Some("fix title syncing")),
+            "fix title syncing"
+        );
+    }
+
+    #[test]
+    fn terminal_title_preserves_spinner_prefixed_context() {
+        assert_eq!(format_terminal_title(Some("⠋ Codex")), "⠋ Codex");
+        assert_eq!(
+            format_terminal_title(Some("⠋ named thread")),
+            "⠋ named thread"
+        );
+    }
+
+    #[test]
+    fn terminal_title_strips_control_characters() {
+        assert_eq!(
+            format_terminal_title(Some("hello\x1b\t\n\r\u{7}world")),
+            "helloworld"
+        );
+    }
+
+    #[test]
+    fn terminal_title_write_is_deduplicated() {
+        let mut output = Vec::new();
+        let mut current_title = None;
+
+        write_terminal_title(
+            &mut output,
+            &mut current_title,
+            TerminalTitleTransport::Direct,
+            Some("plan"),
+        )
+        .expect("first title write should succeed");
+        write_terminal_title(
+            &mut output,
+            &mut current_title,
+            TerminalTitleTransport::Direct,
+            Some("plan"),
+        )
+        .expect("duplicate title write should succeed");
+
+        assert_eq!(output, b"\x1b]0;plan\x07");
+        assert_eq!(current_title, Some("plan".to_string()));
+    }
+
+    #[test]
+    fn terminal_title_write_uses_tmux_passthrough() {
+        let mut output = Vec::new();
+        let mut current_title = None;
+
+        write_terminal_title(
+            &mut output,
+            &mut current_title,
+            TerminalTitleTransport::TmuxPassthrough,
+            Some("plan"),
+        )
+        .expect("tmux title write should succeed");
+
+        assert_eq!(output, b"\x1bPtmux;\x1b\x1b]0;plan\x07\x1b\\");
+        assert_eq!(current_title, Some("plan".to_string()));
+    }
+
+    #[test]
+    fn restore_saved_terminal_title_writes_once_and_clears_flag() {
+        TERMINAL_TITLE_SAVED.store(true, Ordering::Relaxed);
+
+        let mut output = Vec::new();
+        assert_eq!(
+            restore_saved_terminal_title(&mut output).expect("restore should succeed"),
+            true
+        );
+        assert_eq!(
+            restore_saved_terminal_title(&mut output).expect("second restore should be a no-op"),
+            false
+        );
+
+        assert_eq!(output, b"\x1b[23;0t");
+        assert!(!TERMINAL_TITLE_SAVED.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn terminal_title_transport_uses_tmux_passthrough_in_tmux() {
+        assert_eq!(
+            terminal_title_transport_for_env("xterm-256color", true, false),
+            Some(TerminalTitleTransport::TmuxPassthrough)
+        );
+        assert_eq!(
+            terminal_title_transport_for_env("tmux-256color", false, false),
+            None
+        );
+        assert_eq!(
+            terminal_title_transport_for_env("screen-256color", false, false),
+            None
+        );
+        assert_eq!(
+            terminal_title_transport_for_env("xterm-256color", false, true),
+            None
+        );
+        assert_eq!(
+            terminal_title_transport_for_env("xterm-256color", false, false),
+            Some(TerminalTitleTransport::Direct)
+        );
+    }
+
+    #[test]
+    fn terminal_title_restore_support_is_only_available_for_direct_titles() {
+        assert!(terminal_title_restore_supported(Some(
+            TerminalTitleTransport::Direct
+        )));
+        assert!(!terminal_title_restore_supported(Some(
+            TerminalTitleTransport::TmuxPassthrough
+        )));
+        assert!(!terminal_title_restore_supported(None));
+    }
+
+    #[test]
+    fn direct_terminal_title_transport_remains_supported() {
+        assert_eq!(
+            terminal_title_transport_for_env("xterm-256color", false, false),
+            Some(TerminalTitleTransport::Direct)
+        );
+    }
+
+    #[test]
+    fn terminal_title_disable_env_is_case_sensitive_to_supported_values() {
+        assert!(terminal_title_disabled(Some("1")));
+        assert!(terminal_title_disabled(Some("true")));
+        assert!(terminal_title_disabled(Some("TRUE")));
+        assert!(!terminal_title_disabled(Some("True")));
+        assert!(!terminal_title_disabled(Some("0")));
+        assert!(!terminal_title_disabled(None));
     }
 }
