@@ -314,6 +314,16 @@ const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const FAST_STATUS_MODEL: &str = "gpt-5.4";
 const DEFAULT_STATUS_LINE_ITEMS: [&str; 3] =
     ["model-with-reasoning", "context-remaining", "current-dir"];
+const WORK_TITLE_MAX_GRAPHEMES: usize = 24;
+const WORK_TITLE_MAX_WORDS: usize = 4;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorkTitleHint {
+    title: String,
+    action: Option<String>,
+    title_keywords: Vec<String>,
+}
+
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -791,9 +801,12 @@ pub(crate) struct ChatWidget {
     current_rollout_path: Option<PathBuf>,
     // Current working directory (if known)
     current_cwd: Option<PathBuf>,
-    // Normalized preview of the most recently submitted user work, used as a
-    // terminal-title fallback before the thread name exists.
-    submitted_work_title_hint: Option<String>,
+    // Concise work title used as a terminal-title fallback before the thread
+    // name exists.
+    submitted_work_title_hint: Option<WorkTitleHint>,
+    // Candidate replacement for `submitted_work_title_hint`. We only promote a
+    // new title after a second related prompt confirms the work shift.
+    pending_work_title_hint: Option<WorkTitleHint>,
     // Runtime network proxy bind addresses from SessionConfigured.
     session_network_proxy: Option<codex_protocol::protocol::SessionNetworkProxyRuntime>,
     // Shared latch so we only warn once about invalid status-line item IDs.
@@ -3662,6 +3675,7 @@ impl ChatWidget {
             current_rollout_path: None,
             current_cwd,
             submitted_work_title_hint: None,
+            pending_work_title_hint: None,
             session_network_proxy: None,
             status_line_invalid_items_warned,
             status_line_branch: None,
@@ -3849,6 +3863,7 @@ impl ChatWidget {
             current_rollout_path: None,
             current_cwd,
             submitted_work_title_hint: None,
+            pending_work_title_hint: None,
             session_network_proxy: None,
             status_line_invalid_items_warned,
             status_line_branch: None,
@@ -4033,6 +4048,7 @@ impl ChatWidget {
             current_rollout_path,
             current_cwd,
             submitted_work_title_hint: None,
+            pending_work_title_hint: None,
             session_network_proxy,
             status_line_invalid_items_warned,
             status_line_branch: None,
@@ -4900,7 +4916,7 @@ impl ChatWidget {
             return;
         }
 
-        self.submitted_work_title_hint = Self::work_title_hint_from_message(&text);
+        self.update_work_title_hint(&text);
 
         let render_in_history = !self.agent_turn_running;
         let mut items: Vec<UserInput> = Vec::new();
@@ -9169,23 +9185,383 @@ impl ChatWidget {
     }
 
     pub(crate) fn terminal_title_work_hint(&self) -> Option<String> {
-        self.submitted_work_title_hint.clone()
+        self.submitted_work_title_hint
+            .as_ref()
+            .map(|hint| hint.title.clone())
     }
 
-    fn work_title_hint_from_message(message: &str) -> Option<String> {
-        let mut normalized = String::new();
-        for part in message.split_whitespace() {
-            if !normalized.is_empty() {
-                normalized.push(' ');
+    fn update_work_title_hint(&mut self, message: &str) {
+        let Some(candidate) = Self::work_title_hint_from_message(message) else {
+            return;
+        };
+
+        let Some(current) = self.submitted_work_title_hint.as_ref() else {
+            self.submitted_work_title_hint = Some(candidate);
+            self.pending_work_title_hint = None;
+            return;
+        };
+
+        if Self::work_title_hints_are_similar(current, &candidate) {
+            self.pending_work_title_hint = None;
+            return;
+        }
+
+        match self.pending_work_title_hint.as_ref() {
+            Some(pending) if Self::work_title_hints_are_similar(pending, &candidate) => {
+                self.submitted_work_title_hint = Some(candidate);
+                self.pending_work_title_hint = None;
             }
-            normalized.push_str(part);
+            _ => {
+                self.pending_work_title_hint = Some(candidate);
+            }
         }
-        let trimmed = normalized.trim();
-        if trimmed.is_empty() {
-            None
+    }
+
+    fn work_title_hint_from_message(message: &str) -> Option<WorkTitleHint> {
+        let raw_tokens = Self::work_title_raw_tokens(message);
+        if raw_tokens.is_empty() {
+            return None;
+        }
+
+        let leading_action = raw_tokens
+            .first()
+            .map(|token| Self::normalize_work_title_token(token))
+            .filter(|token| Self::is_work_title_action(token));
+        let mut keywords = Vec::new();
+        let mut seen_keywords = HashSet::new();
+        for token in &raw_tokens {
+            let normalized = Self::normalize_work_title_token(token);
+            if Self::is_work_title_stopword(&normalized)
+                || !seen_keywords.insert(normalized.clone())
+            {
+                continue;
+            }
+            keywords.push(normalized);
+        }
+        if keywords.is_empty() {
+            keywords = raw_tokens
+                .iter()
+                .map(|token| Self::normalize_work_title_token(token))
+                .collect();
+        }
+
+        let mut title_words = Vec::new();
+        if let Some(action) = leading_action.as_ref() {
+            title_words.push(Self::format_work_title_token(action));
+        }
+        for keyword in &keywords {
+            if title_words.len() >= WORK_TITLE_MAX_WORDS {
+                break;
+            }
+            if Some(keyword) == leading_action.as_ref() {
+                continue;
+            }
+            title_words.push(Self::format_work_title_token(keyword));
+        }
+        if title_words.is_empty() {
+            title_words.push(Self::format_work_title_token(&raw_tokens[0]));
+        }
+
+        let title = Self::compact_work_title_words(&title_words);
+        if title.is_empty() {
+            return None;
+        }
+
+        let title_keywords = Self::work_title_raw_tokens(&title)
+            .into_iter()
+            .map(|token| Self::normalize_work_title_token(&token))
+            .collect();
+
+        Some(WorkTitleHint {
+            title,
+            action: leading_action,
+            title_keywords,
+        })
+    }
+
+    fn work_title_raw_tokens(message: &str) -> Vec<String> {
+        let mut tokens = Vec::new();
+        let mut current = String::new();
+        for ch in message.chars() {
+            if ch.is_alphanumeric() {
+                current.push(ch);
+            } else if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+        }
+        if !current.is_empty() {
+            tokens.push(current);
+        }
+        tokens
+    }
+
+    fn normalize_work_title_token(token: &str) -> String {
+        let normalized = token.to_ascii_lowercase();
+        if normalized.len() > 4
+            && normalized.ends_with('s')
+            && !normalized.ends_with("ss")
+            && !normalized.ends_with("us")
+            && !normalized.ends_with("is")
+        {
+            normalized[..normalized.len() - 1].to_string()
         } else {
-            Some(truncate_text(trimmed, 60))
+            normalized
         }
+    }
+
+    fn compact_work_title_words(words: &[String]) -> String {
+        let mut title = String::new();
+        for word in words {
+            let candidate = if title.is_empty() {
+                word.clone()
+            } else {
+                format!("{title} {word}")
+            };
+            if candidate.chars().count() > WORK_TITLE_MAX_GRAPHEMES {
+                break;
+            }
+            title = candidate;
+        }
+        if title.is_empty() {
+            truncate_text(&words.join(" "), WORK_TITLE_MAX_GRAPHEMES)
+        } else {
+            title
+        }
+    }
+
+    fn work_title_hints_are_similar(left: &WorkTitleHint, right: &WorkTitleHint) -> bool {
+        if left.title == right.title {
+            return true;
+        }
+
+        let left_action = left.action.as_deref();
+        let right_action = right.action.as_deref();
+        let left_keywords: HashSet<&str> = left
+            .title_keywords
+            .iter()
+            .map(String::as_str)
+            .filter(|keyword| Some(*keyword) != left_action)
+            .collect();
+        let right_keywords: HashSet<&str> = right
+            .title_keywords
+            .iter()
+            .map(String::as_str)
+            .filter(|keyword| Some(*keyword) != right_action)
+            .collect();
+        let shared = left_keywords.intersection(&right_keywords).count();
+        if shared >= 2 {
+            return true;
+        }
+
+        let left_primary = left
+            .title_keywords
+            .iter()
+            .map(String::as_str)
+            .find(|keyword| Some(*keyword) != left_action);
+        let right_primary = right
+            .title_keywords
+            .iter()
+            .map(String::as_str)
+            .find(|keyword| Some(*keyword) != right_action);
+        left_action.is_some()
+            && left_action == right_action
+            && shared >= 1
+            && left_primary.is_some()
+            && left_primary == right_primary
+    }
+
+    fn format_work_title_token(token: &str) -> String {
+        match token {
+            "ai" => "AI".to_string(),
+            "api" => "API".to_string(),
+            "ci" => "CI".to_string(),
+            "cli" => "CLI".to_string(),
+            "gpt" => "GPT".to_string(),
+            "http" => "HTTP".to_string(),
+            "https" => "HTTPS".to_string(),
+            "json" => "JSON".to_string(),
+            "llm" => "LLM".to_string(),
+            "mcp" => "MCP".to_string(),
+            "osc" => "OSC".to_string(),
+            "qa" => "QA".to_string(),
+            "sql" => "SQL".to_string(),
+            "ssh" => "SSH".to_string(),
+            "tui" => "TUI".to_string(),
+            "ui" => "UI".to_string(),
+            "url" => "URL".to_string(),
+            "ux" => "UX".to_string(),
+            "yaml" => "YAML".to_string(),
+            _ if token.chars().all(|ch| ch.is_numeric()) => token.to_string(),
+            _ => {
+                let mut chars = token.chars();
+                let Some(first) = chars.next() else {
+                    return String::new();
+                };
+                let mut formatted = first.to_uppercase().collect::<String>();
+                formatted.push_str(&chars.as_str().to_ascii_lowercase());
+                formatted
+            }
+        }
+    }
+
+    fn is_work_title_action(token: &str) -> bool {
+        matches!(
+            token,
+            "add"
+                | "build"
+                | "check"
+                | "debug"
+                | "fix"
+                | "improve"
+                | "investigate"
+                | "merge"
+                | "normalize"
+                | "refresh"
+                | "refactor"
+                | "rename"
+                | "restore"
+                | "review"
+                | "test"
+                | "update"
+                | "write"
+        )
+    }
+
+    fn is_work_title_stopword(token: &str) -> bool {
+        matches!(
+            token,
+            "a" | "after"
+                | "an"
+                | "and"
+                | "are"
+                | "as"
+                | "at"
+                | "based"
+                | "be"
+                | "because"
+                | "before"
+                | "being"
+                | "but"
+                | "by"
+                | "can"
+                | "codex"
+                | "could"
+                | "did"
+                | "do"
+                | "does"
+                | "doesnt"
+                | "dont"
+                | "during"
+                | "entering"
+                | "expected"
+                | "firstly"
+                | "for"
+                | "from"
+                | "had"
+                | "has"
+                | "have"
+                | "how"
+                | "i"
+                | "if"
+                | "in"
+                | "into"
+                | "is"
+                | "it"
+                | "its"
+                | "just"
+                | "make"
+                | "me"
+                | "my"
+                | "need"
+                | "needs"
+                | "of"
+                | "on"
+                | "or"
+                | "our"
+                | "please"
+                | "really"
+                | "set"
+                | "should"
+                | "so"
+                | "still"
+                | "than"
+                | "that"
+                | "the"
+                | "their"
+                | "them"
+                | "then"
+                | "there"
+                | "these"
+                | "they"
+                | "this"
+                | "those"
+                | "to"
+                | "too"
+                | "true"
+                | "up"
+                | "use"
+                | "very"
+                | "want"
+                | "wants"
+                | "was"
+                | "we"
+                | "were"
+                | "what"
+                | "when"
+                | "where"
+                | "which"
+                | "while"
+                | "with"
+                | "without"
+                | "work"
+                | "would"
+                | "you"
+                | "your"
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn debug_work_title_hint(&self) -> Option<String> {
+        self.terminal_title_work_hint()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn debug_pending_work_title_hint(&self) -> Option<String> {
+        self.pending_work_title_hint
+            .as_ref()
+            .map(|hint| hint.title.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn debug_update_work_title_hint(&mut self, message: &str) {
+        self.update_work_title_hint(message);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn debug_build_work_title_hint(message: &str) -> Option<String> {
+        Self::work_title_hint_from_message(message).map(|hint| hint.title)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn debug_work_title_similarity(left: &str, right: &str) -> Option<bool> {
+        Some(Self::work_title_hints_are_similar(
+            &Self::work_title_hint_from_message(left)?,
+            &Self::work_title_hint_from_message(right)?,
+        ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn debug_work_title_state_after(
+        &mut self,
+        messages: &[&str],
+    ) -> (Option<String>, Option<String>) {
+        for message in messages {
+            self.debug_update_work_title_hint(message);
+        }
+        (
+            self.debug_work_title_hint(),
+            self.debug_pending_work_title_hint(),
+        )
     }
 
     /// Returns the current thread's precomputed rollout path.

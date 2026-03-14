@@ -47,11 +47,10 @@ where
     for (line_index, line) in textwrap::wrap(text, &opts).iter().enumerate() {
         match line {
             std::borrow::Cow::Borrowed(slice) => {
-                let start = unsafe { slice.as_ptr().offset_from(text.as_ptr()) as usize };
-                let end = start + slice.len();
-                let trailing_spaces = text[end..].chars().take_while(|c| *c == ' ').count();
-                lines.push(start..end + trailing_spaces + 1);
-                cursor = end + trailing_spaces;
+                let mapped = borrowed_wrapped_line_to_range(text, cursor, slice);
+                let trailing_spaces = text[mapped.end..].chars().take_while(|c| *c == ' ').count();
+                lines.push(mapped.start..mapped.end + trailing_spaces + 1);
+                cursor = mapped.end + trailing_spaces;
             }
             std::borrow::Cow::Owned(slice) => {
                 let synthetic_prefix = if line_index == 0 {
@@ -82,10 +81,9 @@ where
     for (line_index, line) in textwrap::wrap(text, &opts).iter().enumerate() {
         match line {
             std::borrow::Cow::Borrowed(slice) => {
-                let start = unsafe { slice.as_ptr().offset_from(text.as_ptr()) as usize };
-                let end = start + slice.len();
-                lines.push(start..end);
-                cursor = end;
+                let mapped = borrowed_wrapped_line_to_range(text, cursor, slice);
+                lines.push(mapped.clone());
+                cursor = mapped.end;
             }
             std::borrow::Cow::Owned(slice) => {
                 let synthetic_prefix = if line_index == 0 {
@@ -100,6 +98,26 @@ where
         }
     }
     lines
+}
+
+fn borrowed_wrapped_line_to_range(text: &str, cursor: usize, wrapped: &str) -> Range<usize> {
+    let text_start = text.as_ptr() as usize;
+    let text_end = text_start.saturating_add(text.len());
+    let wrapped_start = wrapped.as_ptr() as usize;
+    let wrapped_end = wrapped_start.saturating_add(wrapped.len());
+
+    if wrapped_start >= text_start && wrapped_end <= text_end {
+        let start = wrapped_start - text_start;
+        let end = start + wrapped.len();
+        return start..end;
+    }
+
+    tracing::warn!(
+        cursor,
+        wrapped = %wrapped,
+        "wrap_ranges: borrowed line was detached from source text; falling back to content mapping"
+    );
+    map_owned_wrapped_line_to_range(text, cursor, wrapped, "")
 }
 
 /// Maps an owned (materialized) wrapped line back to a byte range in `text`.
@@ -1271,6 +1289,17 @@ them."#
         // The function should recover and return the mapped prefix range.
         let range = map_owned_wrapped_line_to_range("hello world", 0, "helloX", "");
         assert_eq!(range, 0..5);
+    }
+
+    #[test]
+    fn borrowed_wrapped_line_to_range_recovers_when_slice_is_detached() {
+        let text = "fix first prompt title behavior in tui. Reply only OK.\r\n";
+        let detached = text.to_string();
+        let slice = detached.trim_end_matches('\n');
+
+        let range = borrowed_wrapped_line_to_range(text, 0, slice);
+
+        assert_eq!(range, 0..slice.len());
     }
 
     #[test]
