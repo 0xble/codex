@@ -18,17 +18,20 @@ use wiremock::MockServer;
 use wiremock::matchers::body_string_contains;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn first_turn_title_uses_lightweight_llm_generation() -> anyhow::Result<()> {
+async fn first_turn_title_uses_active_model_and_claude_prompt() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
 
     let title_mock = mount_sse_once_match(
         &server,
-        body_string_contains("\"model\":\"gpt-5.1-codex-mini\""),
+        body_string_contains("Generate a concise, sentence-case title (3-7 words)"),
         sse(vec![
             ev_response_created("resp-title"),
-            ev_assistant_message("msg-title", "\"Fix Terminal Titles.\""),
+            ev_assistant_message(
+                "msg-title",
+                "{\"title\":\"Fix terminal title naming flow\"}",
+            ),
             ev_completed("resp-title"),
         ]),
     )
@@ -73,7 +76,7 @@ async fn first_turn_title_uses_lightweight_llm_generation() -> anyhow::Result<()
     .await;
     assert_eq!(
         title_event.thread_name.as_deref(),
-        Some("Fix Terminal Titles")
+        Some("Fix terminal title naming flow")
     );
 
     wait_for_event(&test.codex, |event| {
@@ -89,10 +92,10 @@ async fn first_turn_title_uses_lightweight_llm_generation() -> anyhow::Result<()
     let title_request = title_requests
         .iter()
         .find(|request| {
-            request.body_json()["model"].as_str() == Some("gpt-5.1-codex-mini")
+            request.body_json()["model"].as_str() == Some("gpt-5.1")
                 && request
                     .instructions_text()
-                    .contains("Output ONLY the thread title.")
+                    .contains("Generate a concise, sentence-case title (3-7 words)")
         })
         .unwrap();
     assert_eq!(
@@ -102,8 +105,8 @@ async fn first_turn_title_uses_lightweight_llm_generation() -> anyhow::Result<()
     assert!(
         title_request
             .instructions_text()
-            .contains("Output ONLY the thread title."),
-        "expected title-only rename instructions"
+            .contains("Return JSON with a single \"title\" field."),
+        "expected Claude-style title instructions"
     );
     assert!(
         title_request

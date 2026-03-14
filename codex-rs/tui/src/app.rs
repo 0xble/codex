@@ -45,6 +45,7 @@ use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
+use codex_core::ThreadTitleState;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -54,7 +55,7 @@ use codex_core::config::types::ApprovalsReviewer;
 use codex_core::config::types::ModelAvailabilityNuxConfig;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::Feature;
-use codex_core::find_thread_name_by_id;
+use codex_core::find_thread_title_state_by_id;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
@@ -125,6 +126,8 @@ use self::pending_interactive_replay::PendingInteractiveReplayState;
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 const TITLE_SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const REQUEST_INPUT_TITLE_FRAMES: [&str; 2] = ["?", "."];
+const TURN_COMPLETE_TITLE_PREFIX: &str = "✓";
 const DEFAULT_TITLE_IDENTITY: &str = "Codex";
 
 enum ThreadInteractiveRequest {
@@ -672,44 +675,148 @@ fn normalize_title_segment(segment: Option<String>) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn normalize_persisted_title_segment(segment: Option<String>) -> Option<String> {
+    normalize_title_segment(segment).filter(|segment| !is_generic_title_placeholder(segment))
+}
+
+fn normalize_status_title_segment(segment: Option<String>) -> Option<String> {
+    normalize_title_segment(segment).filter(|segment| !is_generic_status_placeholder(segment))
+}
+
+fn is_generic_title_placeholder(segment: &str) -> bool {
+    matches!(
+        segment.trim().to_ascii_lowercase().as_str(),
+        "codex"
+            | "working"
+            | "working in background"
+            | "waiting for background terminal"
+            | "codex completed"
+            | "turn complete"
+    )
+}
+
+fn is_generic_status_placeholder(segment: &str) -> bool {
+    matches!(
+        segment.trim().to_ascii_lowercase().as_str(),
+        "working" | "working in background" | "waiting for background terminal"
+    )
+}
+
+fn compose_running_title(manual_title: Option<&str>, live_title: String) -> String {
+    match manual_title {
+        Some(manual_title) if !manual_title.eq_ignore_ascii_case(live_title.as_str()) => {
+            format!("{manual_title} | {live_title}")
+        }
+        _ => live_title,
+    }
+}
+
+fn request_input_title_indicator(show_spinner: bool, tick: u128) -> &'static str {
+    if show_spinner {
+        REQUEST_INPUT_TITLE_FRAMES[tick as usize % REQUEST_INPUT_TITLE_FRAMES.len()]
+    } else {
+        "?"
+    }
+}
+
+fn complete_title_indicator(identity: String) -> String {
+    format!("{TURN_COMPLETE_TITLE_PREFIX} {identity}")
+}
+
 fn compute_title_context(
-    thread_name: Option<String>,
-    persisted_thread_name: Option<String>,
+    manual_title: Option<String>,
+    canonical_title: Option<String>,
+    latest_title: Option<String>,
     work_hint: Option<String>,
     status_header: Option<String>,
     focus: Option<TerminalTitleFocus>,
     task_running: bool,
+    turn_complete: bool,
     show_spinner: bool,
     tick: u128,
 ) -> Option<String> {
-    let idle_identity = normalize_title_segment(thread_name.clone())
-        .or_else(|| normalize_title_segment(persisted_thread_name))
-        .or_else(|| normalize_title_segment(work_hint.clone()));
+    let manual_title = normalize_title_segment(manual_title);
+    let canonical_title = normalize_persisted_title_segment(canonical_title);
+    let latest_title = normalize_persisted_title_segment(latest_title);
+    let work_hint = normalize_persisted_title_segment(work_hint);
+    let status = normalize_status_title_segment(status_header);
+    let idle_identity = manual_title
+        .clone()
+        .or_else(|| latest_title.clone())
+        .or_else(|| canonical_title.clone())
+        .or_else(|| work_hint.clone());
     if task_running && focus == Some(TerminalTitleFocus::RequestUserInput) {
-        return Some(format!("? {DEFAULT_TITLE_IDENTITY}"));
+        let live_title = work_hint
+            .clone()
+            .or_else(|| canonical_title.clone())
+            .or_else(|| latest_title.clone())
+            .or_else(|| status.clone())
+            .unwrap_or_else(|| TerminalTitleFocus::RequestUserInput.label().to_string());
+        return Some(compose_running_title(
+            manual_title.as_deref(),
+            format!(
+                "{} {live_title}",
+                request_input_title_indicator(show_spinner, tick)
+            ),
+        ));
     }
-    let status = normalize_title_segment(status_header)
-        .filter(|status| !status.eq_ignore_ascii_case("working"));
     if !task_running {
-        return idle_identity;
+        return if turn_complete {
+            let completed_identity = work_hint
+                .clone()
+                .or_else(|| canonical_title.clone())
+                .or_else(|| latest_title.clone())
+                .or_else(|| idle_identity.clone())
+                .unwrap_or_else(|| DEFAULT_TITLE_IDENTITY.to_string());
+            Some(compose_running_title(
+                manual_title.as_deref(),
+                complete_title_indicator(completed_identity),
+            ))
+        } else {
+            idle_identity
+        };
     }
 
-    let running_identity = normalize_title_segment(work_hint)
-        .or_else(|| normalize_title_segment(thread_name))
-        .or(idle_identity);
+    let running_identity = work_hint
+        .clone()
+        .or_else(|| canonical_title.clone())
+        .or_else(|| latest_title.clone());
 
     let title = focus
         .map(|focus| focus.label().to_string())
-        .or(status)
         .or(running_identity)
+        .or(status)
         .unwrap_or_else(|| DEFAULT_TITLE_IDENTITY.to_string());
 
-    if show_spinner {
+    let title = if show_spinner {
         let frame = TITLE_SPINNER_FRAMES[tick as usize % TITLE_SPINNER_FRAMES.len()];
-        return Some(format!("{frame} {title}"));
+        format!("{frame} {title}")
+    } else {
+        title
+    };
+
+    Some(compose_running_title(manual_title.as_deref(), title))
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct PersistedThreadTitles {
+    latest_title: Option<String>,
+    manual_title: Option<String>,
+    canonical_title: Option<String>,
+}
+
+impl PersistedThreadTitles {
+    fn is_empty(&self) -> bool {
+        self.latest_title.is_none() && self.manual_title.is_none() && self.canonical_title.is_none()
     }
 
-    Some(title)
+    fn from_state(state: ThreadTitleState) -> Self {
+        Self {
+            latest_title: state.latest_title,
+            manual_title: state.manual_title,
+            canonical_title: state.auto_title,
+        }
+    }
 }
 
 fn title_animation_tick() -> u128 {
@@ -723,13 +830,16 @@ fn title_animation_tick() -> u128 {
 async fn update_terminal_title(tui: &mut tui::Tui, app: &mut App) -> Result<()> {
     let task_running = app.chat_widget.is_task_running();
     let animations_enabled = app.chat_widget.config_ref().animations;
+    let persisted_titles = app.refresh_persisted_thread_titles(task_running).await;
     let title_context = compute_title_context(
-        app.chat_widget.thread_name(),
-        app.refresh_persisted_thread_name(task_running).await,
+        persisted_titles.manual_title,
+        persisted_titles.canonical_title,
+        persisted_titles.latest_title,
         app.chat_widget.terminal_title_work_hint(),
         app.chat_widget.terminal_title_status(),
         app.chat_widget.terminal_title_focus(),
         task_running,
+        app.chat_widget.terminal_title_turn_complete(),
         animations_enabled,
         if animations_enabled {
             title_animation_tick()
@@ -782,8 +892,8 @@ pub(crate) struct App {
     feedback_audience: FeedbackAudience,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
-    persisted_thread_name: Option<String>,
-    persisted_thread_name_thread_id: Option<ThreadId>,
+    persisted_thread_titles: PersistedThreadTitles,
+    persisted_thread_titles_thread_id: Option<ThreadId>,
 
     /// One-shot guard used while switching threads.
     ///
@@ -838,45 +948,48 @@ fn normalize_harness_overrides_for_cwd(
 }
 
 impl App {
-    async fn refresh_persisted_thread_name(&mut self, task_running: bool) -> Option<String> {
-        let has_live_thread_name =
-            normalize_title_segment(self.chat_widget.thread_name()).is_some();
+    async fn refresh_persisted_thread_titles(
+        &mut self,
+        task_running: bool,
+    ) -> PersistedThreadTitles {
+        let live_thread_name = normalize_title_segment(self.chat_widget.thread_name());
         let live_thread_id = self
             .active_thread_id
             .or(self.primary_thread_id)
             .or(self.chat_widget.thread_id());
-        if has_live_thread_name {
-            self.persisted_thread_name = None;
-            self.persisted_thread_name_thread_id = live_thread_id;
-            return None;
-        }
 
         let Some(thread_id) = live_thread_id else {
-            self.persisted_thread_name = None;
-            self.persisted_thread_name_thread_id = None;
-            return None;
+            self.persisted_thread_titles = PersistedThreadTitles::default();
+            self.persisted_thread_titles_thread_id = None;
+            return self.persisted_thread_titles.clone();
         };
 
-        if self.persisted_thread_name_thread_id == Some(thread_id) {
-            if self.persisted_thread_name.is_some() || task_running {
-                return self.persisted_thread_name.clone();
+        if self.persisted_thread_titles_thread_id == Some(thread_id) {
+            let cache_matches_live = match live_thread_name.as_deref() {
+                Some(live_thread_name) => {
+                    self.persisted_thread_titles.latest_title.as_deref() == Some(live_thread_name)
+                }
+                None => true,
+            };
+            if cache_matches_live && (!self.persisted_thread_titles.is_empty() || task_running) {
+                return self.persisted_thread_titles.clone();
             }
         } else {
-            self.persisted_thread_name = None;
-            self.persisted_thread_name_thread_id = Some(thread_id);
+            self.persisted_thread_titles = PersistedThreadTitles::default();
+            self.persisted_thread_titles_thread_id = Some(thread_id);
         }
 
-        match find_thread_name_by_id(&self.config.codex_home, &thread_id).await {
-            Ok(thread_name) => {
-                self.persisted_thread_name = thread_name;
+        match find_thread_title_state_by_id(&self.config.codex_home, &thread_id).await {
+            Ok(thread_titles) => {
+                self.persisted_thread_titles = PersistedThreadTitles::from_state(thread_titles);
             }
             Err(err) => {
-                tracing::warn!("Failed to read persisted thread name for terminal title: {err}");
-                self.persisted_thread_name = None;
+                tracing::warn!("Failed to read persisted thread titles for terminal title: {err}");
+                self.persisted_thread_titles = PersistedThreadTitles::default();
             }
         }
 
-        self.persisted_thread_name.clone()
+        self.persisted_thread_titles.clone()
     }
 
     pub fn chatwidget_init_for_forked_or_resumed_thread(
@@ -2289,8 +2402,8 @@ impl App {
             feedback: feedback.clone(),
             feedback_audience,
             pending_update_action: None,
-            persisted_thread_name: None,
-            persisted_thread_name_thread_id: None,
+            persisted_thread_titles: PersistedThreadTitles::default(),
+            persisted_thread_titles_thread_id: None,
             suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
@@ -4461,14 +4574,16 @@ mod tests {
             compute_title_context(
                 Some("thread name".to_string()),
                 Some("persisted title".to_string()),
+                Some("thread name".to_string()),
                 Some("draft focus".to_string()),
                 Some("Reviewing".to_string()),
                 Some(TerminalTitleFocus::Permissions),
                 true,
+                false,
                 true,
                 0,
             ),
-            Some("⠋ Permissions".to_string())
+            Some("thread name | ⠋ Permissions".to_string())
         );
     }
 
@@ -4478,31 +4593,54 @@ mod tests {
             compute_title_context(
                 Some("thread name".to_string()),
                 Some("persisted title".to_string()),
+                Some("thread name".to_string()),
                 Some("draft focus".to_string()),
                 Some("Need input".to_string()),
                 Some(TerminalTitleFocus::RequestUserInput),
                 true,
+                false,
                 true,
                 0,
             ),
-            Some("? Codex".to_string())
+            Some("thread name | ? draft focus".to_string())
         );
     }
 
     #[test]
-    fn title_context_uses_status_when_focus_is_absent() {
+    fn title_context_uses_static_question_indicator_when_animations_are_disabled() {
         assert_eq!(
             compute_title_context(
-                Some("thread name".to_string()),
+                None,
+                Some("Improve Codex Titles".to_string()),
+                Some("Improve Codex Titles".to_string()),
+                None,
+                Some("Need input".to_string()),
+                Some(TerminalTitleFocus::RequestUserInput),
+                true,
+                false,
+                false,
+                0,
+            ),
+            Some("? Improve Codex Titles".to_string())
+        );
+    }
+
+    #[test]
+    fn title_context_prefers_work_identity_over_status_when_focus_is_absent() {
+        assert_eq!(
+            compute_title_context(
+                None,
+                Some("persisted title".to_string()),
                 Some("persisted title".to_string()),
                 Some("draft focus".to_string()),
                 Some("Reviewing".to_string()),
                 None,
                 true,
+                false,
                 true,
                 1,
             ),
-            Some("⠙ Reviewing".to_string())
+            Some("⠙ draft focus".to_string())
         );
     }
 
@@ -4512,9 +4650,11 @@ mod tests {
             compute_title_context(
                 Some("named thread".to_string()),
                 Some("persisted title".to_string()),
+                Some("named thread".to_string()),
                 Some("draft focus".to_string()),
                 Some("Working".to_string()),
                 Some(TerminalTitleFocus::Approval),
+                false,
                 false,
                 true,
                 0,
@@ -4524,10 +4664,12 @@ mod tests {
         assert_eq!(
             compute_title_context(
                 None,
+                None,
                 Some("persisted title".to_string()),
                 Some("draft focus".to_string()),
                 None,
                 None,
+                false,
                 false,
                 true,
                 0,
@@ -4542,56 +4684,115 @@ mod tests {
             compute_title_context(
                 Some("named thread".to_string()),
                 None,
+                Some("named thread".to_string()),
                 Some("draft focus".to_string()),
                 Some("Working".to_string()),
                 None,
                 true,
                 false,
+                false,
                 0,
             ),
-            Some("draft focus".to_string())
+            Some("named thread | draft focus".to_string())
         );
     }
 
     #[test]
-    fn title_context_falls_back_to_thread_name_when_running_without_work_hint() {
+    fn title_context_falls_back_to_canonical_title_when_running_without_work_hint() {
         assert_eq!(
             compute_title_context(
-                Some("named thread".to_string()),
                 None,
+                Some("Improve Codex Titles".to_string()),
+                Some("Improve Codex Titles".to_string()),
                 None,
                 Some("Working".to_string()),
                 None,
                 true,
                 false,
+                false,
                 0,
             ),
-            Some("named thread".to_string())
+            Some("Improve Codex Titles".to_string())
         );
     }
 
     #[test]
     fn title_context_falls_back_to_codex_when_running_without_any_context() {
         assert_eq!(
-            compute_title_context(None, None, None, None, None, true, true, 2),
+            compute_title_context(None, None, None, None, None, None, true, false, true, 2),
             Some("⠹ Codex".to_string())
         );
     }
 
     #[test]
-    fn title_context_falls_back_to_submitted_work_hint_before_thread_name_exists() {
+    fn title_context_uses_custom_title_prefix_while_running() {
         assert_eq!(
             compute_title_context(
-                None,
-                None,
+                Some("Custom Title".to_string()),
+                Some("Improve Codex Titles".to_string()),
+                Some("Custom Title".to_string()),
                 Some("Implement first-turn title update".to_string()),
                 Some("Working".to_string()),
                 None,
                 true,
                 false,
+                false,
                 0,
             ),
-            Some("Implement first-turn title update".to_string())
+            Some("Custom Title | Implement first-turn title update".to_string())
+        );
+    }
+
+    #[test]
+    fn title_context_filters_background_wait_placeholders() {
+        assert_eq!(
+            compute_title_context(
+                None,
+                Some("Waiting for background terminal".to_string()),
+                Some("Waiting for background terminal".to_string()),
+                None,
+                Some("Working in background".to_string()),
+                None,
+                true,
+                false,
+                true,
+                0,
+            ),
+            Some("⠋ Codex".to_string())
+        );
+    }
+
+    #[test]
+    fn title_context_shows_completion_indicator_when_turn_finishes() {
+        assert_eq!(
+            compute_title_context(
+                Some("Custom Title".to_string()),
+                Some("Improve Codex Titles".to_string()),
+                Some("Custom Title".to_string()),
+                Some("Implement first-turn title update".to_string()),
+                None,
+                None,
+                false,
+                true,
+                false,
+                0,
+            ),
+            Some("Custom Title | ✓ Implement first-turn title update".to_string())
+        );
+        assert_eq!(
+            compute_title_context(
+                None,
+                Some("Improve Codex Titles".to_string()),
+                Some("Improve Codex Titles".to_string()),
+                None,
+                None,
+                None,
+                false,
+                true,
+                false,
+                0,
+            ),
+            Some("✓ Improve Codex Titles".to_string())
         );
     }
 
@@ -6787,8 +6988,8 @@ smart_approvals = true
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
             pending_update_action: None,
-            persisted_thread_name: None,
-            persisted_thread_name_thread_id: None,
+            persisted_thread_titles: PersistedThreadTitles::default(),
+            persisted_thread_titles_thread_id: None,
             suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
@@ -6849,8 +7050,8 @@ smart_approvals = true
                 feedback: codex_feedback::CodexFeedback::new(),
                 feedback_audience: FeedbackAudience::External,
                 pending_update_action: None,
-                persisted_thread_name: None,
-                persisted_thread_name_thread_id: None,
+                persisted_thread_titles: PersistedThreadTitles::default(),
+                persisted_thread_titles_thread_id: None,
                 suppress_shutdown_complete: false,
                 pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),

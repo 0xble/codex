@@ -1894,6 +1894,7 @@ async fn make_chatwidget_manual(
         current_status: StatusIndicatorState::working(),
         retry_status_header: None,
         pending_status_indicator_restore: false,
+        show_turn_complete_title_indicator: false,
         suppress_queue_autosend: false,
         thread_id: None,
         thread_name: None,

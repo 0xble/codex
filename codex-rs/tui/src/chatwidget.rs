@@ -724,6 +724,8 @@ pub(crate) struct ChatWidget {
     retry_status_header: Option<String>,
     // Set when commentary output completes; once stream queues go idle we restore the status row.
     pending_status_indicator_restore: bool,
+    // True after a live turn completes and cleared when the next turn starts.
+    show_turn_complete_title_indicator: bool,
     suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
@@ -1712,6 +1714,7 @@ impl ChatWidget {
 
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
+        self.show_turn_complete_title_indicator = false;
         self.turn_sleep_inhibitor.set_turn_running(true);
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
@@ -1801,6 +1804,9 @@ impl ChatWidget {
         self.notify(Notification::AgentTurnComplete {
             response: last_agent_message.unwrap_or_default(),
         });
+        if !from_replay {
+            self.show_turn_complete_title_indicator = true;
+        }
 
         self.maybe_show_pending_rate_limit_prompt();
     }
@@ -3679,6 +3685,7 @@ impl ChatWidget {
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            show_turn_complete_title_indicator: false,
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
@@ -3867,6 +3874,7 @@ impl ChatWidget {
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            show_turn_complete_title_indicator: false,
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
@@ -4052,6 +4060,7 @@ impl ChatWidget {
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            show_turn_complete_title_indicator: false,
             suppress_queue_autosend: false,
             thread_id,
             thread_name,
@@ -4972,7 +4981,9 @@ impl ChatWidget {
             return;
         }
 
-        self.update_work_title_hint(&text);
+        if self.update_work_title_hint(&text) {
+            self.request_redraw();
+        }
 
         let render_in_history = !self.agent_turn_running;
         let mut items: Vec<UserInput> = Vec::new();
@@ -9254,35 +9265,41 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn terminal_title_turn_complete(&self) -> bool {
+        self.show_turn_complete_title_indicator
+    }
+
     pub(crate) fn terminal_title_work_hint(&self) -> Option<String> {
         self.submitted_work_title_hint
             .as_ref()
             .map(|hint| hint.title.clone())
     }
 
-    fn update_work_title_hint(&mut self, message: &str) {
+    fn update_work_title_hint(&mut self, message: &str) -> bool {
         let Some(candidate) = Self::work_title_hint_from_message(message) else {
-            return;
+            return false;
         };
 
         let Some(current) = self.submitted_work_title_hint.as_ref() else {
             self.submitted_work_title_hint = Some(candidate);
             self.pending_work_title_hint = None;
-            return;
+            return true;
         };
 
         if Self::work_title_hints_are_similar(current, &candidate) {
             self.pending_work_title_hint = None;
-            return;
+            return false;
         }
 
         match self.pending_work_title_hint.as_ref() {
             Some(pending) if Self::work_title_hints_are_similar(pending, &candidate) => {
                 self.submitted_work_title_hint = Some(candidate);
                 self.pending_work_title_hint = None;
+                true
             }
             _ => {
                 self.pending_work_title_hint = Some(candidate);
+                false
             }
         }
     }
@@ -9599,7 +9616,7 @@ impl ChatWidget {
 
     #[cfg(test)]
     pub(crate) fn debug_update_work_title_hint(&mut self, message: &str) {
-        self.update_work_title_hint(message);
+        let _ = self.update_work_title_hint(message);
     }
 
     #[cfg(test)]

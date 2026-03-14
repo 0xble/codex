@@ -24,9 +24,13 @@ pub use list::find_thread_path_by_id_str as find_conversation_path_by_id_str;
 pub use list::rollout_date_parts;
 pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;
+pub use session_index::ThreadNameSource;
+pub use session_index::ThreadTitleState;
 pub use session_index::append_thread_name;
+pub use session_index::append_thread_name_with_source;
 pub use session_index::find_thread_name_by_id;
 pub use session_index::find_thread_path_by_name_str;
+pub use session_index::find_thread_title_state_by_id;
 
 #[cfg(test)]
 pub mod tests;

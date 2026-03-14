@@ -23,11 +23,13 @@ fn find_thread_id_by_name_prefers_latest_entry() -> std::io::Result<()> {
             id: id1,
             thread_name: "same".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
+            source: ThreadNameSource::Auto,
         },
         SessionIndexEntry {
             id: id2,
             thread_name: "same".to_string(),
             updated_at: "2024-01-02T00:00:00Z".to_string(),
+            source: ThreadNameSource::Auto,
         },
     ];
     write_index(&path, &lines)?;
@@ -47,11 +49,13 @@ fn find_thread_name_by_id_prefers_latest_entry() -> std::io::Result<()> {
             id,
             thread_name: "first".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
+            source: ThreadNameSource::Auto,
         },
         SessionIndexEntry {
             id,
             thread_name: "second".to_string(),
             updated_at: "2024-01-02T00:00:00Z".to_string(),
+            source: ThreadNameSource::Auto,
         },
     ];
     write_index(&path, &lines)?;
@@ -73,6 +77,7 @@ fn scan_index_returns_none_when_entry_missing() -> std::io::Result<()> {
         id,
         thread_name: "present".to_string(),
         updated_at: "2024-01-01T00:00:00Z".to_string(),
+        source: ThreadNameSource::Auto,
     }];
     write_index(&path, &lines)?;
 
@@ -95,16 +100,19 @@ async fn find_thread_names_by_ids_prefers_latest_entry() -> std::io::Result<()> 
             id: id1,
             thread_name: "first".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
+            source: ThreadNameSource::Auto,
         },
         SessionIndexEntry {
             id: id2,
             thread_name: "other".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
+            source: ThreadNameSource::Auto,
         },
         SessionIndexEntry {
             id: id1,
             thread_name: "latest".to_string(),
             updated_at: "2024-01-02T00:00:00Z".to_string(),
+            source: ThreadNameSource::Auto,
         },
     ];
     write_index(&path, &lines)?;
@@ -132,11 +140,13 @@ fn scan_index_finds_latest_match_among_mixed_entries() -> std::io::Result<()> {
         id: id_target,
         thread_name: "target".to_string(),
         updated_at: "2024-01-03T00:00:00Z".to_string(),
+        source: ThreadNameSource::Auto,
     };
     let expected_other = SessionIndexEntry {
         id: id_other,
         thread_name: "target".to_string(),
         updated_at: "2024-01-02T00:00:00Z".to_string(),
+        source: ThreadNameSource::Auto,
     };
     // Resolution is based on append order (scan from end), not updated_at.
     let lines = vec![
@@ -144,6 +154,7 @@ fn scan_index_finds_latest_match_among_mixed_entries() -> std::io::Result<()> {
             id: id_target,
             thread_name: "target".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
+            source: ThreadNameSource::Auto,
         },
         expected_other.clone(),
         expected.clone(),
@@ -151,6 +162,7 @@ fn scan_index_finds_latest_match_among_mixed_entries() -> std::io::Result<()> {
             id: ThreadId::new(),
             thread_name: "another".to_string(),
             updated_at: "2024-01-04T00:00:00Z".to_string(),
+            source: ThreadNameSource::Auto,
         },
     ];
     write_index(&path, &lines)?;
@@ -163,5 +175,62 @@ fn scan_index_finds_latest_match_among_mixed_entries() -> std::io::Result<()> {
 
     let found_other_by_id = scan_index_from_end_by_id(&path, &id_other)?;
     assert_eq!(found_other_by_id, Some(expected_other));
+    Ok(())
+}
+
+#[tokio::test]
+async fn find_thread_title_state_by_id_tracks_manual_and_auto_titles() -> std::io::Result<()> {
+    let temp = TempDir::new()?;
+    let path = session_index_path(temp.path());
+    let id = ThreadId::new();
+    let lines = vec![
+        SessionIndexEntry {
+            id,
+            thread_name: "Improve Codex Titles".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            source: ThreadNameSource::Auto,
+        },
+        SessionIndexEntry {
+            id,
+            thread_name: "Custom Title".to_string(),
+            updated_at: "2024-01-02T00:00:00Z".to_string(),
+            source: ThreadNameSource::Manual,
+        },
+    ];
+    write_index(&path, &lines)?;
+
+    let state = find_thread_title_state_by_id(temp.path(), &id).await?;
+    assert_eq!(
+        state,
+        ThreadTitleState {
+            latest_title: Some("Custom Title".to_string()),
+            manual_title: Some("Custom Title".to_string()),
+            auto_title: Some("Improve Codex Titles".to_string()),
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn find_thread_title_state_defaults_legacy_entries_to_auto() -> std::io::Result<()> {
+    let temp = TempDir::new()?;
+    let path = session_index_path(temp.path());
+    let id = ThreadId::new();
+    std::fs::write(
+        &path,
+        format!(
+            "{{\"id\":\"{id}\",\"thread_name\":\"Legacy Title\",\"updated_at\":\"2024-01-01T00:00:00Z\"}}\n"
+        ),
+    )?;
+
+    let state = find_thread_title_state_by_id(temp.path(), &id).await?;
+    assert_eq!(
+        state,
+        ThreadTitleState {
+            latest_title: Some("Legacy Title".to_string()),
+            manual_title: None,
+            auto_title: Some("Legacy Title".to_string()),
+        }
+    );
     Ok(())
 }
