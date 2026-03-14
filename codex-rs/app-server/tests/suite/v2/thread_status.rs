@@ -24,7 +24,10 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let responses = vec![create_final_assistant_message_sse_response("done")?];
+    let responses = vec![
+        create_final_assistant_message_sse_response("Thread Status")?,
+        create_final_assistant_message_sse_response("done")?,
+    ];
     let server = create_mock_responses_server_sequence(responses).await;
     create_config_toml(codex_home.path(), &server.uri())?;
 

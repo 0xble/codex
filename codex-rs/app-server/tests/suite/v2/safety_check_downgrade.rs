@@ -1,5 +1,6 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
+use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::to_response;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -35,7 +36,10 @@ async fn openai_model_header_mismatch_emits_model_rerouted_notification_v2() -> 
         responses::ev_completed("resp-1"),
     ]);
     let response = responses::sse_response(body).insert_header("OpenAI-Model", SERVER_MODEL);
-    let _response_mock = responses::mount_response_once(&server, response).await;
+    let title_response =
+        responses::sse_response(create_final_assistant_message_sse_response("Thread Title")?);
+    let _response_mock =
+        responses::mount_response_sequence(&server, vec![title_response, response]).await;
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -108,7 +112,10 @@ async fn response_model_field_mismatch_emits_model_rerouted_notification_v2_when
         responses::ev_completed("resp-1"),
     ]);
     let response = responses::sse_response(body).insert_header("OpenAI-Model", REQUESTED_MODEL);
-    let _response_mock = responses::mount_response_once(&server, response).await;
+    let title_response =
+        responses::sse_response(create_final_assistant_message_sse_response("Thread Title")?);
+    let _response_mock =
+        responses::mount_response_sequence(&server, vec![title_response, response]).await;
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;

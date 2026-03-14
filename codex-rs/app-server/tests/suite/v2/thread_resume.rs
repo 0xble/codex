@@ -955,6 +955,9 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
 #[tokio::test]
 async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> Result<()> {
     let server = responses::start_mock_server().await;
+    let title_response = responses::sse_response(create_final_assistant_message_sse_response(
+        "Resume Thread",
+    )?);
     let first_response = responses::sse_response(responses::sse(vec![
         responses::ev_response_created("resp-1"),
         responses::ev_assistant_message("msg-1", "Done"),
@@ -966,8 +969,11 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
         responses::ev_completed("resp-2"),
     ]))
     .set_delay(std::time::Duration::from_millis(500));
-    let _response_mock =
-        responses::mount_response_sequence(&server, vec![first_response, second_response]).await;
+    let _response_mock = responses::mount_response_sequence(
+        &server,
+        vec![title_response, first_response, second_response],
+    )
+    .await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
@@ -1067,6 +1073,7 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
 #[tokio::test]
 async fn thread_resume_replays_pending_command_execution_request_approval() -> Result<()> {
     let responses = vec![
+        create_final_assistant_message_sse_response("Resume Thread")?,
         create_final_assistant_message_sse_response("seeded")?,
         create_shell_command_sse_response(
             vec![
@@ -1195,7 +1202,7 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
         primary.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
-    wait_for_responses_request_count(&server, /*expected_count*/ 3).await?;
+    wait_for_responses_request_count(&server, 4).await?;
 
     Ok(())
 }
@@ -1214,6 +1221,7 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
 *** End Patch
 "#;
     let responses = vec![
+        create_final_assistant_message_sse_response("Resume Thread")?,
         create_final_assistant_message_sse_response("seeded")?,
         create_apply_patch_sse_response(patch, "patch-call")?,
         create_final_assistant_message_sse_response("done")?,
@@ -1361,7 +1369,7 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
         primary.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
-    wait_for_responses_request_count(&server, /*expected_count*/ 3).await?;
+    wait_for_responses_request_count(&server, 4).await?;
 
     Ok(())
 }
@@ -1750,6 +1758,7 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
+    let title_body = create_final_assistant_message_sse_response("Resume Thread")?;
     let first_body = responses::sse(vec![
         responses::ev_response_created("resp-1"),
         responses::ev_assistant_message("msg-1", "Done"),
@@ -1760,7 +1769,8 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
         responses::ev_assistant_message("msg-2", "Done"),
         responses::ev_completed("resp-2"),
     ]);
-    let response_mock = responses::mount_sse_sequence(&server, vec![first_body, second_body]).await;
+    let response_mock =
+        responses::mount_sse_sequence(&server, vec![title_body, first_body, second_body]).await;
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;

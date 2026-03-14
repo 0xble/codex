@@ -24,6 +24,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 async fn request_permissions_round_trip() -> Result<()> {
     let codex_home = tempfile::TempDir::new()?;
     let responses = vec![
+        create_final_assistant_message_sse_response("Request Permissions")?,
         create_request_permissions_sse_response("call1")?,
         create_final_assistant_message_sse_response("done")?,
     ];

@@ -197,6 +197,7 @@ async fn thread_list_basic_empty() -> Result<()> {
 #[tokio::test]
 async fn thread_list_reports_system_error_idle_flag_after_failed_turn() -> Result<()> {
     let responses = vec![
+        create_final_assistant_message_sse_response("Thread List")?,
         create_final_assistant_message_sse_response("seeded")?,
         responses::sse_failed("resp-2", "server_error", "simulated failure"),
     ];
@@ -564,14 +565,40 @@ sqlite = true
     )?;
 
     // `thread/list` only applies `search_term` on the sqlite path. In this test we
-    // create rollouts manually, so we must also create the sqlite DB and mark backfill
-    // complete; otherwise app-server will permanently use filesystem fallback.
+    // create rollouts manually, so we must also seed sqlite thread rows directly;
+    // otherwise the sqlite search path has nothing to match against.
     let state_db =
         codex_state::StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into())
             .await?;
-    state_db
-        .mark_backfill_complete(/*last_watermark*/ None)
-        .await?;
+    state_db.mark_backfill_complete(None).await?;
+    for (thread_id, filename_ts, meta_rfc3339, title, preview) in [
+        (
+            older_match.as_str(),
+            "2025-01-02T10-00-00",
+            "2025-01-02T10:00:00Z",
+            "match: needle",
+            "match: needle",
+        ),
+        (
+            newer_match.as_str(),
+            "2025-01-02T12-00-00",
+            "2025-01-02T12:00:00Z",
+            "needle suffix",
+            "needle suffix",
+        ),
+    ] {
+        let created_at = DateTime::parse_from_rfc3339(meta_rfc3339)?.with_timezone(&Utc);
+        let mut metadata = codex_state::ThreadMetadataBuilder::new(
+            ThreadId::from_string(thread_id)?,
+            rollout_path(codex_home.path(), filename_ts, thread_id),
+            created_at,
+            CoreSessionSource::Cli,
+        )
+        .build("mock_provider");
+        metadata.title = title.to_string();
+        metadata.first_user_message = Some(preview.to_string());
+        state_db.upsert_thread(&metadata).await?;
+    }
 
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp

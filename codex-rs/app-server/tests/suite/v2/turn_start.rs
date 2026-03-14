@@ -1680,6 +1680,12 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
         "model": REQUESTED_MODEL,
         "reasoning_effort": REQUESTED_REASONING_EFFORT,
     }))?;
+    let _thread_title = responses::mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, "\"model\":\"gpt-5.1-codex-mini\""),
+        create_final_assistant_message_sse_response("Spawn Agent")?,
+    )
+    .await;
     let _parent_turn = responses::mount_sse_once_match(
         &server,
         |req: &wiremock::Request| body_contains(req, PARENT_PROMPT),
@@ -2065,6 +2071,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
 "#;
 
     let responses = vec![
+        create_final_assistant_message_sse_response("File Change")?,
         create_apply_patch_sse_response(patch_1, "patch-call-1")?,
         create_final_assistant_message_sse_response("patch 1 applied")?,
         create_apply_patch_sse_response(patch_2, "patch-call-2")?,
@@ -2392,6 +2399,7 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let responses = vec![
+        create_final_assistant_message_sse_response("Command Execution")?,
         create_exec_command_sse_response("uexec-1")?,
         create_final_assistant_message_sse_response("done")?,
     ];

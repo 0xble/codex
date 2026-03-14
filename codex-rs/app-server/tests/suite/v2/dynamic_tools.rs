@@ -39,7 +39,10 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 /// Ensures dynamic tool specs are serialized into the model request payload.
 #[tokio::test]
 async fn thread_start_injects_dynamic_tools_into_model_requests() -> Result<()> {
-    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let responses = vec![
+        create_final_assistant_message_sse_response("Dynamic Tools Test")?,
+        create_final_assistant_message_sse_response("Done")?,
+    ];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
@@ -121,7 +124,10 @@ async fn thread_start_injects_dynamic_tools_into_model_requests() -> Result<()> 
 
 #[tokio::test]
 async fn thread_start_keeps_hidden_dynamic_tools_out_of_model_requests() -> Result<()> {
-    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let responses = vec![
+        create_final_assistant_message_sse_response("Dynamic Tools Test")?,
+        create_final_assistant_message_sse_response("Done")?,
+    ];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
@@ -199,8 +205,10 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
     let tool_args = json!({ "city": "Paris" });
     let tool_call_arguments = serde_json::to_string(&tool_args)?;
 
-    // First response triggers a dynamic tool call, second closes the turn.
+    // First response names the thread, second triggers a dynamic tool call,
+    // third closes the turn.
     let responses = vec![
+        create_final_assistant_message_sse_response("Dynamic Tool Run")?,
         responses::sse(vec![
             responses::ev_response_created("resp-1"),
             responses::ev_function_call(call_id, tool_name, &tool_call_arguments),
@@ -370,6 +378,7 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
     let tool_call_arguments = serde_json::to_string(&tool_args)?;
 
     let responses = vec![
+        create_final_assistant_message_sse_response("Dynamic Tool Items")?,
         responses::sse(vec![
             responses::ev_response_created("resp-1"),
             responses::ev_function_call(call_id, tool_name, &tool_call_arguments),

@@ -78,6 +78,11 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
         &responses_server,
         vec![
             responses::sse(vec![
+                responses::ev_response_created("resp-title"),
+                responses::ev_assistant_message("msg-title", "Calendar"),
+                responses::ev_completed("resp-title"),
+            ]),
+            responses::sse(vec![
                 responses::ev_response_created("resp-0"),
                 responses::ev_assistant_message("msg-0", "Warmup"),
                 responses::ev_completed("resp-0"),
@@ -260,8 +265,8 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
     }
 
     let requests = response_mock.requests();
-    assert_eq!(requests.len(), 3);
-    let function_call_output = requests[2].function_call_output(TOOL_CALL_ID);
+    assert_eq!(requests.len(), 4);
+    let function_call_output = requests[3].function_call_output(TOOL_CALL_ID);
     assert_eq!(
         function_call_output.get("type"),
         Some(&Value::String("function_call_output".to_string()))
