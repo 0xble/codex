@@ -1333,6 +1333,7 @@ fn entered_review_mode_produces_item_started() {
             target: ReviewTarget::Custom {
                 instructions: "Please review".to_string(),
             },
+            pathspecs: vec![],
             user_facing_hint: Some("commit 1234567: Tidy UI colors".to_string()),
         }),
     ));
@@ -1398,6 +1399,7 @@ fn review_mode_completion_reuses_started_item_id() {
             target: ReviewTarget::Custom {
                 instructions: "Please review".to_string(),
             },
+            pathspecs: vec![],
             user_facing_hint: Some("current changes".to_string()),
         }),
     ));

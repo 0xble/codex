@@ -2211,7 +2211,7 @@ mod tests {
             .await
             .expect("build default config");
 
-        let params = thread_start_params_from_config(&config);
+        let params = thread_start_params_from_config(&config, None);
 
         assert_eq!(
             params.approvals_reviewer,
@@ -2235,7 +2235,7 @@ mod tests {
             .await
             .expect("build auto-review config");
 
-        let params = thread_start_params_from_config(&config);
+        let params = thread_start_params_from_config(&config, None);
 
         assert_eq!(
             params.approvals_reviewer,
