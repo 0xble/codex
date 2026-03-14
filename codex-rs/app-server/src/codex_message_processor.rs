@@ -2068,6 +2068,7 @@ impl CodexMessageProcessor {
         let ThreadStartParams {
             model,
             model_provider,
+            thread_id,
             service_tier,
             cwd,
             approval_policy,
@@ -2120,6 +2121,7 @@ impl CodexMessageProcessor {
                 request_id,
                 config,
                 typesafe_overrides,
+                thread_id,
                 dynamic_tools,
                 persist_extended_history,
                 service_name,
@@ -2193,6 +2195,7 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
+        requested_thread_id: Option<String>,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
         persist_extended_history: bool,
         service_name: Option<String>,
@@ -2221,6 +2224,107 @@ impl CodexMessageProcessor {
         };
 
         let dynamic_tools = dynamic_tools.unwrap_or_default();
+        let requested_thread_id = match requested_thread_id {
+            Some(thread_id) => match ThreadId::from_string(&thread_id) {
+                Ok(thread_id) => Some(thread_id),
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid thread id `{thread_id}`: {err}"),
+                        data: None,
+                    };
+                    listener_task_context
+                        .outgoing
+                        .send_error(request_id, error)
+                        .await;
+                    return;
+                }
+            },
+            None => None,
+        };
+        if let Some(thread_id) = requested_thread_id.as_ref() {
+            if listener_task_context
+                .thread_manager
+                .get_thread(*thread_id)
+                .await
+                .is_ok()
+            {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("thread already exists: {thread_id}"),
+                    data: None,
+                };
+                listener_task_context
+                    .outgoing
+                    .send_error(request_id, error)
+                    .await;
+                return;
+            }
+            match find_thread_path_by_id_str(
+                &listener_task_context.codex_home,
+                &thread_id.to_string(),
+            )
+            .await
+            {
+                Ok(Some(_)) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("thread already exists: {thread_id}"),
+                        data: None,
+                    };
+                    listener_task_context
+                        .outgoing
+                        .send_error(request_id, error)
+                        .await;
+                    return;
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("failed to inspect requested thread id: {err}"),
+                        data: None,
+                    };
+                    listener_task_context
+                        .outgoing
+                        .send_error(request_id, error)
+                        .await;
+                    return;
+                }
+            }
+            match find_archived_thread_path_by_id_str(
+                &listener_task_context.codex_home,
+                &thread_id.to_string(),
+            )
+            .await
+            {
+                Ok(Some(_)) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("thread already exists: {thread_id}"),
+                        data: None,
+                    };
+                    listener_task_context
+                        .outgoing
+                        .send_error(request_id, error)
+                        .await;
+                    return;
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("failed to inspect requested thread id: {err}"),
+                        data: None,
+                    };
+                    listener_task_context
+                        .outgoing
+                        .send_error(request_id, error)
+                        .await;
+                    return;
+                }
+            }
+        }
         let core_dynamic_tools = if dynamic_tools.is_empty() {
             Vec::new()
         } else {
@@ -2255,6 +2359,7 @@ impl CodexMessageProcessor {
                 core_dynamic_tools,
                 persist_extended_history,
                 service_name,
+                requested_thread_id,
                 request_trace,
             )
             .instrument(tracing::info_span!(
@@ -2369,9 +2474,16 @@ impl CodexMessageProcessor {
                     .await;
             }
             Err(err) => {
+                let (code, message) = match err {
+                    CodexErr::InvalidRequest(message) => (INVALID_REQUEST_ERROR_CODE, message),
+                    other => (
+                        INTERNAL_ERROR_CODE,
+                        format!("error creating thread: {other}"),
+                    ),
+                };
                 let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("error creating thread: {err}"),
+                    code,
+                    message,
                     data: None,
                 };
                 listener_task_context

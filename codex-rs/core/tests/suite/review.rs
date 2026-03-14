@@ -957,9 +957,17 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
         .unwrap();
 
     let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
-    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    let requests = request_log.requests();
+    let requests = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let requests = request_log.requests();
+            if !requests.is_empty() {
+                break requests;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for review request");
     assert_eq!(requests.len(), 1);
     for request in &requests {
         assert_eq!(request.path(), "/v1/responses");

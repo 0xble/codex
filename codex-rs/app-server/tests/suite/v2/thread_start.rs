@@ -41,6 +41,32 @@ use super::analytics::thread_initialized_event;
 use super::analytics::wait_for_analytics_payload;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+
+enum ThreadStartOutcome {
+    Response(ThreadStartResponse),
+    Error(JSONRPCError),
+}
+
+async fn read_thread_start_outcome(
+    mcp: &mut McpProcess,
+    request_id: i64,
+) -> Result<ThreadStartOutcome> {
+    loop {
+        let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
+        match message {
+            JSONRPCMessage::Response(response) if response.id == RequestId::Integer(request_id) => {
+                return Ok(ThreadStartOutcome::Response(to_response::<
+                    ThreadStartResponse,
+                >(response)?));
+            }
+            JSONRPCMessage::Error(error) if error.id == RequestId::Integer(request_id) => {
+                return Ok(ThreadStartOutcome::Error(error));
+            }
+            _ => continue,
+        }
+    }
+}
 
 #[tokio::test]
 async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
@@ -264,6 +290,135 @@ model_reasoning_effort = "high"
     } = to_response::<ThreadStartResponse>(resp)?;
 
     assert_eq!(reasoning_effort, Some(ReasoningEffort::High));
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_accepts_requested_thread_id() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let requested_thread_id = "123e4567-e89b-12d3-a456-426614174000".to_string();
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            thread_id: Some(requested_thread_id.clone()),
+            ..Default::default()
+        })
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
+
+    assert_eq!(thread.id, requested_thread_id);
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_rejects_duplicate_requested_thread_id_across_processes() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp_a = McpProcess::new(codex_home.path()).await?;
+    let mut mcp_b = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp_a.initialize()).await??;
+    timeout(DEFAULT_READ_TIMEOUT, mcp_b.initialize()).await??;
+
+    let requested_thread_id = "123e4567-e89b-12d3-a456-426614174001".to_string();
+    let req_id_a = mcp_a
+        .send_thread_start_request(ThreadStartParams {
+            thread_id: Some(requested_thread_id.clone()),
+            ..Default::default()
+        })
+        .await?;
+    let req_id_b = mcp_b
+        .send_thread_start_request(ThreadStartParams {
+            thread_id: Some(requested_thread_id.clone()),
+            ..Default::default()
+        })
+        .await?;
+
+    let outcome_a = read_thread_start_outcome(&mut mcp_a, req_id_a).await?;
+    let outcome_b = read_thread_start_outcome(&mut mcp_b, req_id_b).await?;
+
+    let outcomes = [outcome_a, outcome_b];
+    let success_count = outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome, ThreadStartOutcome::Response(_)))
+        .count();
+    assert_eq!(success_count, 1);
+
+    let error = outcomes
+        .iter()
+        .find_map(|outcome| match outcome {
+            ThreadStartOutcome::Error(error) => Some(error),
+            ThreadStartOutcome::Response(_) => None,
+        })
+        .expect("one process should fail with an invalid request");
+    assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert!(error.error.message.contains("thread already exists"));
+
+    let response = outcomes
+        .iter()
+        .find_map(|outcome| match outcome {
+            ThreadStartOutcome::Response(response) => Some(response),
+            ThreadStartOutcome::Error(_) => None,
+        })
+        .expect("one process should succeed");
+    assert_eq!(response.thread.id, requested_thread_id);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_rejects_duplicate_requested_thread_id_after_first_start_returns() -> Result<()>
+{
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp_a = McpProcess::new(codex_home.path()).await?;
+    let mut mcp_b = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp_a.initialize()).await??;
+    timeout(DEFAULT_READ_TIMEOUT, mcp_b.initialize()).await??;
+
+    let requested_thread_id = "123e4567-e89b-12d3-a456-426614174002".to_string();
+    let req_id_a = mcp_a
+        .send_thread_start_request(ThreadStartParams {
+            thread_id: Some(requested_thread_id.clone()),
+            ..Default::default()
+        })
+        .await?;
+    let outcome_a = read_thread_start_outcome(&mut mcp_a, req_id_a).await?;
+    let ThreadStartOutcome::Response(response_a) = outcome_a else {
+        anyhow::bail!("first process should succeed");
+    };
+    assert_eq!(response_a.thread.id, requested_thread_id);
+
+    let req_id_b = mcp_b
+        .send_thread_start_request(ThreadStartParams {
+            thread_id: Some(requested_thread_id.clone()),
+            ..Default::default()
+        })
+        .await?;
+    let outcome_b = read_thread_start_outcome(&mut mcp_b, req_id_b).await?;
+    let ThreadStartOutcome::Error(error_b) = outcome_b else {
+        anyhow::bail!("second process should fail");
+    };
+    assert_eq!(error_b.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert!(error_b.error.message.contains("thread already exists"));
+
     Ok(())
 }
 

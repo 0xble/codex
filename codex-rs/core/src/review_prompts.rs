@@ -2,6 +2,7 @@ use codex_git_utils::merge_base_with_head;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_utils_template::Template;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -58,7 +59,7 @@ pub fn resolve_review_request(
     cwd: &Path,
 ) -> anyhow::Result<ResolvedReviewRequest> {
     let target = request.target;
-    let pathspecs = request.pathspecs;
+    let pathspecs = normalize_hint_pathspecs(&request.pathspecs)?;
     let prompt = review_prompt(&target, &pathspecs, cwd)?;
     let user_facing_hint = request
         .user_facing_hint
@@ -222,7 +223,25 @@ pub fn user_facing_hint(target: &ReviewTarget, pathspecs: &[String]) -> String {
 }
 
 pub fn user_facing_hint_for_request(request: &ReviewRequest) -> anyhow::Result<String> {
-    Ok(user_facing_hint(&request.target, &request.pathspecs))
+    let pathspecs = normalize_hint_pathspecs(&request.pathspecs)?;
+    Ok(user_facing_hint(&request.target, &pathspecs))
+}
+
+fn normalize_hint_pathspecs(pathspecs: &[String]) -> anyhow::Result<Vec<String>> {
+    let mut normalized = Vec::with_capacity(pathspecs.len());
+    let mut seen = HashSet::new();
+
+    for raw in pathspecs {
+        if raw.trim().is_empty() {
+            anyhow::bail!("Review pathspecs must not be empty");
+        }
+        let normalized_pathspec = normalize_repo_relative_pathspec(raw);
+        if seen.insert(normalized_pathspec.clone()) {
+            normalized.push(normalized_pathspec);
+        }
+    }
+
+    Ok(normalized)
 }
 
 pub fn normalize_repo_relative_pathspec(pathspec: &str) -> String {

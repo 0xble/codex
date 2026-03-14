@@ -563,7 +563,13 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     &client,
                     ClientRequest::ThreadStart {
                         request_id: request_ids.next(),
-                        params: thread_start_params_from_config(&config),
+                        params: thread_start_params_from_config(
+                            &config,
+                            requested_thread_id_for_thread_start(
+                                command.as_ref(),
+                                session_id.clone(),
+                            ),
+                        ),
                     },
                     "thread/start",
                 )
@@ -578,7 +584,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 &client,
                 ClientRequest::ThreadStart {
                     request_id: request_ids.next(),
-                    params: thread_start_params_from_config(&config),
+                    params: thread_start_params_from_config(
+                        &config,
+                        requested_thread_id_for_thread_start(command.as_ref(), session_id.clone()),
+                    ),
                 },
                 "thread/start",
             )
@@ -600,10 +609,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
         (Some(ExecCommand::Review(review_cli)), _, _) => {
             let review_request = build_review_request(review_cli)?;
-            let summary = codex_core::review_prompts::user_facing_hint(
-                &review_request.target,
-                &review_request.pathspecs,
-            );
+            let summary = codex_core::review_prompts::user_facing_hint_for_request(&review_request)?;
             (InitialOperation::Review { review_request }, summary)
         }
         (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
@@ -860,8 +866,12 @@ fn sandbox_mode_from_policy(
     }
 }
 
-fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
+fn thread_start_params_from_config(
+    config: &Config,
+    requested_thread_id: Option<String>,
+) -> ThreadStartParams {
     ThreadStartParams {
+        thread_id: requested_thread_id,
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
@@ -871,6 +881,16 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
         ..ThreadStartParams::default()
+    }
+}
+
+fn requested_thread_id_for_thread_start(
+    command: Option<&ExecCommand>,
+    requested_thread_id: Option<String>,
+) -> Option<String> {
+    match command {
+        Some(ExecCommand::Resume(_)) => None,
+        _ => requested_thread_id,
     }
 }
 
@@ -2215,7 +2235,7 @@ mod tests {
             .await
             .expect("build config with manual-only review policy");
 
-        let params = thread_start_params_from_config(&config);
+        let params = thread_start_params_from_config(&config, None);
 
         assert_eq!(
             params.approvals_reviewer,
@@ -2238,12 +2258,39 @@ mod tests {
             .await
             .expect("build config with guardian review policy");
 
-        let params = thread_start_params_from_config(&config);
+        let params = thread_start_params_from_config(&config, None);
 
         assert_eq!(
             params.approvals_reviewer,
             Some(codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent)
         );
+    }
+
+    #[test]
+    fn thread_start_params_forward_requested_session_id() {
+        let config =
+            Config::load_default_with_cli_overrides(Vec::new()).expect("load default config");
+        let requested_thread_id = "123e4567-e89b-12d3-a456-426614174000".to_string();
+
+        let params = thread_start_params_from_config(&config, Some(requested_thread_id.clone()));
+
+        assert_eq!(params.thread_id, Some(requested_thread_id));
+    }
+
+    #[test]
+    fn requested_thread_id_for_thread_start_ignores_resume_lookup_tokens() {
+        let command = ExecCommand::Resume(cli::ResumeArgs {
+            session_id: Some("friendly-name".to_string()),
+            last: false,
+            all: false,
+            images: Vec::new(),
+            prompt: None,
+        });
+
+        let requested =
+            requested_thread_id_for_thread_start(Some(&command), Some("friendly-name".to_string()));
+
+        assert_eq!(requested, None);
     }
 
     #[test]

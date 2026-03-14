@@ -7121,6 +7121,12 @@ impl ChatWidget {
             self.bottom_pane.set_task_running(/*running*/ true);
         }
         self.is_review_mode = true;
+        let hint = review.user_facing_hint.unwrap_or_else(|| {
+            codex_core::review_prompts::user_facing_hint(
+                &review.target,
+                &review.pathspecs,
+            )
+        });
         let banner = format!(">> Code review started: {hint} <<");
         self.add_to_history(history_cell::new_review_status_line(banner));
         self.request_redraw();

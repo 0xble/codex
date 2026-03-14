@@ -2133,6 +2133,12 @@
           "default": null,
           "description": "Where to run the review: inline (default) on the current thread or detached on a new thread (returned in `reviewThreadId`)."
         },
+        "pathspecs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "target": {
           "$ref": "#/definitions/ReviewTarget"
         },
@@ -2148,6 +2154,23 @@
     },
     "ReviewTarget": {
       "oneOf": [
+        {
+          "description": "Review only the currently staged changes.",
+          "properties": {
+            "type": {
+              "enum": [
+                "stagedChanges"
+              ],
+              "title": "StagedChangesReviewTargetType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "StagedChangesReviewTarget",
+          "type": "object"
+        },
         {
           "description": "Review the working tree: staged, unstaged, and untracked files.",
           "properties": {
@@ -3101,6 +3124,12 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
           ]
         }
       },
