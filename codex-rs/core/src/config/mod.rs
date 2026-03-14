@@ -2,6 +2,7 @@ use crate::auth::AuthCredentialsStoreMode;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::types::AppsConfigToml;
+use crate::config::types::AutoModeInstructionsMergeStrategy;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
@@ -470,6 +471,14 @@ pub struct Config {
     /// Plan preset. The `none` value means "no reasoning" (not "inherit the
     /// global default").
     pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
+    /// Optional Auto-mode instruction override used by the built-in Auto preset.
+    ///
+    /// When set, the override either replaces or appends to the built-in Auto
+    /// preset instructions, depending on `auto_mode_instructions_merge_strategy`.
+    pub auto_mode_instructions: Option<String>,
+    /// Controls how `auto_mode_instructions` interacts with the built-in Auto
+    /// preset instructions.
+    pub auto_mode_instructions_merge_strategy: AutoModeInstructionsMergeStrategy,
 
     /// Optional value to use for `reasoning.summary` when making a request
     /// using the Responses API. When unset, the model catalog default is used.
@@ -1288,6 +1297,8 @@ pub struct ConfigToml {
 
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
+    pub auto_mode_instructions: Option<String>,
+    pub auto_mode_instructions_merge_strategy: Option<AutoModeInstructionsMergeStrategy>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
@@ -2670,6 +2681,13 @@ impl Config {
             plan_mode_reasoning_effort: config_profile
                 .plan_mode_reasoning_effort
                 .or(cfg.plan_mode_reasoning_effort),
+            auto_mode_instructions: config_profile
+                .auto_mode_instructions
+                .or(cfg.auto_mode_instructions),
+            auto_mode_instructions_merge_strategy: config_profile
+                .auto_mode_instructions_merge_strategy
+                .or(cfg.auto_mode_instructions_merge_strategy)
+                .unwrap_or_default(),
             model_reasoning_summary: config_profile
                 .model_reasoning_summary
                 .or(cfg.model_reasoning_summary),

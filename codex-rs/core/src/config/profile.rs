@@ -5,6 +5,7 @@ use serde::Serialize;
 
 use crate::config::ToolsToml;
 use crate::config::types::ApprovalsReviewer;
+use crate::config::types::AutoModeInstructionsMergeStrategy;
 use crate::config::types::Personality;
 use crate::config::types::WindowsToml;
 use crate::protocol::AskForApproval;
@@ -31,6 +32,8 @@ pub struct ConfigProfile {
     pub sandbox_mode: Option<SandboxMode>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
+    pub auto_mode_instructions: Option<String>,
+    pub auto_mode_instructions_merge_strategy: Option<AutoModeInstructionsMergeStrategy>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     /// Optional path to a JSON model catalog (applied on startup only).

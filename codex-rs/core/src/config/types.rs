@@ -52,6 +52,14 @@ pub struct WindowsToml {
     pub sandbox_private_desktop: Option<bool>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoModeInstructionsMergeStrategy {
+    #[default]
+    Replace,
+    Append,
+}
+
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, JsonSchema)]
 pub enum UriBasedFileOpener {
     #[serde(rename = "vscode")]

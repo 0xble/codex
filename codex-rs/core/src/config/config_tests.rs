@@ -3,6 +3,7 @@ use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
 use crate::config::types::AppToolApproval;
 use crate::config::types::ApprovalsReviewer;
+use crate::config::types::AutoModeInstructionsMergeStrategy;
 use crate::config::types::BundledSkillsConfig;
 use crate::config::types::FeedbackConfigToml;
 use crate::config::types::HistoryPersistence;
@@ -4478,6 +4479,8 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             show_raw_agent_reasoning: false,
             model_reasoning_effort: Some(ReasoningEffort::High),
             plan_mode_reasoning_effort: None,
+            auto_mode_instructions: None,
+            auto_mode_instructions_merge_strategy: AutoModeInstructionsMergeStrategy::Replace,
             model_reasoning_summary: Some(ReasoningSummary::Detailed),
             model_supports_reasoning_summaries: None,
             model_catalog: None,
@@ -4620,6 +4623,8 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         show_raw_agent_reasoning: false,
         model_reasoning_effort: None,
         plan_mode_reasoning_effort: None,
+        auto_mode_instructions: None,
+        auto_mode_instructions_merge_strategy: AutoModeInstructionsMergeStrategy::Replace,
         model_reasoning_summary: None,
         model_supports_reasoning_summaries: None,
         model_catalog: None,
@@ -4760,6 +4765,8 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         show_raw_agent_reasoning: false,
         model_reasoning_effort: None,
         plan_mode_reasoning_effort: None,
+        auto_mode_instructions: None,
+        auto_mode_instructions_merge_strategy: AutoModeInstructionsMergeStrategy::Replace,
         model_reasoning_summary: None,
         model_supports_reasoning_summaries: None,
         model_catalog: None,
@@ -4886,6 +4893,8 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         show_raw_agent_reasoning: false,
         model_reasoning_effort: Some(ReasoningEffort::High),
         plan_mode_reasoning_effort: None,
+        auto_mode_instructions: None,
+        auto_mode_instructions_merge_strategy: AutoModeInstructionsMergeStrategy::Replace,
         model_reasoning_summary: Some(ReasoningSummary::Detailed),
         model_supports_reasoning_summaries: None,
         model_catalog: None,
@@ -6053,6 +6062,43 @@ experimental_realtime_start_instructions = "start instructions from config"
     assert_eq!(
         config.experimental_realtime_start_instructions.as_deref(),
         Some("start instructions from config")
+    );
+    Ok(())
+}
+
+#[test]
+fn auto_mode_instructions_load_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+auto_mode_instructions = "Finish by listing assumptions."
+auto_mode_instructions_merge_strategy = "append"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.auto_mode_instructions.as_deref(),
+        Some("Finish by listing assumptions.")
+    );
+    assert_eq!(
+        cfg.auto_mode_instructions_merge_strategy,
+        Some(AutoModeInstructionsMergeStrategy::Append)
+    );
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.auto_mode_instructions.as_deref(),
+        Some("Finish by listing assumptions.")
+    );
+    assert_eq!(
+        config.auto_mode_instructions_merge_strategy,
+        AutoModeInstructionsMergeStrategy::Append
     );
     Ok(())
 }

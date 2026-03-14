@@ -6479,6 +6479,10 @@ impl CodexMessageProcessor {
 
         let collaboration_modes_config = CollaborationModesConfig {
             default_mode_request_user_input: thread.enabled(Feature::DefaultModeRequestUserInput),
+            auto_mode_instructions: thread.config().auto_mode_instructions.clone(),
+            auto_mode_instructions_merge_strategy: thread
+                .config()
+                .auto_mode_instructions_merge_strategy,
         };
         let collaboration_mode = params.collaboration_mode.map(|mode| {
             self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config)
