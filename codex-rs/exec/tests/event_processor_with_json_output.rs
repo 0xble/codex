@@ -1,3 +1,4 @@
+use codex_core::review_format::render_review_output_text;
 use codex_exec::event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use codex_exec::exec_events::AgentMessageItem;
 use codex_exec::exec_events::CollabAgentState;
@@ -18,6 +19,7 @@ use codex_exec::exec_events::McpToolCallStatus;
 use codex_exec::exec_events::PatchApplyStatus;
 use codex_exec::exec_events::PatchChangeKind;
 use codex_exec::exec_events::ReasoningItem;
+use codex_exec::exec_events::ReviewModeItem;
 use codex_exec::exec_events::ThreadErrorEvent;
 use codex_exec::exec_events::ThreadEvent;
 use codex_exec::exec_events::ThreadItem;
@@ -62,6 +64,12 @@ use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
+use codex_protocol::protocol::ReviewCodeLocation;
+use codex_protocol::protocol::ReviewFinding;
+use codex_protocol::protocol::ReviewLineRange;
+use codex_protocol::protocol::ReviewOutputEvent;
+use codex_protocol::protocol::ReviewRequest;
+use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::WarningEvent;
@@ -1311,6 +1319,136 @@ fn task_complete_produces_turn_completed_with_usage() {
                 input_tokens: 1200,
                 cached_input_tokens: 200,
                 output_tokens: 345,
+            },
+        })]
+    );
+}
+
+#[test]
+fn entered_review_mode_produces_item_started() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let out = ep.collect_thread_events(&event(
+        "e1",
+        EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::Custom {
+                instructions: "Please review".to_string(),
+            },
+            user_facing_hint: Some("commit 1234567: Tidy UI colors".to_string()),
+        }),
+    ));
+
+    assert_eq!(
+        out,
+        vec![ThreadEvent::ItemStarted(ItemStartedEvent {
+            item: ThreadItem {
+                id: "item_0".to_string(),
+                details: ThreadItemDetails::EnteredReviewMode(ReviewModeItem {
+                    review: "commit 1234567: Tidy UI colors".to_string(),
+                }),
+            },
+        })]
+    );
+}
+
+#[test]
+fn exited_review_mode_produces_item_completed_with_rendered_review() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let review_output = ReviewOutputEvent {
+        findings: vec![ReviewFinding {
+            title: "Prefer Stylize helpers".to_string(),
+            body: "Use .dim()/.bold() chaining instead of manual Style.".to_string(),
+            confidence_score: 0.9,
+            priority: 1,
+            code_location: ReviewCodeLocation {
+                absolute_file_path: PathBuf::from("/tmp/file.rs"),
+                line_range: ReviewLineRange { start: 10, end: 20 },
+            },
+        }],
+        overall_correctness: "good".to_string(),
+        overall_explanation: "All good with minor cleanup.".to_string(),
+        overall_confidence_score: 0.8,
+    };
+    let expected_review = render_review_output_text(&review_output);
+    let out = ep.collect_thread_events(&event(
+        "e1",
+        EventMsg::ExitedReviewMode(codex_protocol::protocol::ExitedReviewModeEvent {
+            review_output: Some(review_output),
+        }),
+    ));
+
+    assert_eq!(
+        out,
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
+                id: "item_0".to_string(),
+                details: ThreadItemDetails::ExitedReviewMode(ReviewModeItem {
+                    review: expected_review,
+                }),
+            },
+        })]
+    );
+}
+
+#[test]
+fn review_mode_completion_reuses_started_item_id() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let started = ep.collect_thread_events(&event(
+        "e1",
+        EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::Custom {
+                instructions: "Please review".to_string(),
+            },
+            user_facing_hint: Some("current changes".to_string()),
+        }),
+    ));
+    let completed = ep.collect_thread_events(&event(
+        "e2",
+        EventMsg::ExitedReviewMode(codex_protocol::protocol::ExitedReviewModeEvent {
+            review_output: Some(ReviewOutputEvent {
+                overall_explanation: "Looks good.".to_string(),
+                ..Default::default()
+            }),
+        }),
+    ));
+
+    let started_item_id = match &started[..] {
+        [ThreadEvent::ItemStarted(ItemStartedEvent { item })] => item.id.clone(),
+        other => panic!("unexpected start events: {other:?}"),
+    };
+
+    assert_eq!(
+        completed,
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
+                id: started_item_id,
+                details: ThreadItemDetails::ExitedReviewMode(ReviewModeItem {
+                    review: "Looks good.".to_string(),
+                }),
+            },
+        })]
+    );
+}
+
+#[test]
+fn exited_review_mode_without_output_reports_interruption() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let out = ep.collect_thread_events(&event(
+        "e1",
+        EventMsg::ExitedReviewMode(codex_protocol::protocol::ExitedReviewModeEvent {
+            review_output: None,
+        }),
+    ));
+
+    assert_eq!(
+        out,
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
+                id: "item_0".to_string(),
+                details: ThreadItemDetails::ExitedReviewMode(ReviewModeItem {
+                    review:
+                        "Review was interrupted. Please re-run /review and wait for it to complete."
+                            .to_string(),
+                }),
             },
         })]
     );

@@ -1,4 +1,5 @@
 use codex_core::config::Config;
+use codex_core::review_format::render_review_output_text;
 use codex_core::web_search::web_search_detail;
 use codex_protocol::items::TurnItem;
 use codex_protocol::num_format::format_with_separators;
@@ -62,6 +63,8 @@ use codex_utils_sandbox_summary::create_config_summary_entries;
 /// This should be configurable. When used in CI, users may not want to impose
 /// a limit so they can see the full transcript.
 const MAX_OUTPUT_LINES_FOR_EXEC_TOOL_CALL: usize = 20;
+const REVIEW_INTERRUPTED_MESSAGE: &str =
+    "Review was interrupted. Please re-run /review and wait for it to complete.";
 pub(crate) struct EventProcessorWithHumanOutput {
     call_id_to_patch: HashMap<String, PatchApplyBegin>,
 
@@ -319,14 +322,20 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::TurnComplete(TurnCompleteEvent {
                 last_agent_message, ..
             }) => {
-                let last_message = last_agent_message
-                    .as_deref()
-                    .or(self.last_proposed_plan.as_deref());
+                let last_message = resolved_last_message_for_output(
+                    last_agent_message.as_deref(),
+                    self.final_message.as_deref(),
+                    self.last_proposed_plan.as_deref(),
+                );
                 if let Some(output_file) = self.last_message_path.as_deref() {
                     handle_last_message(last_message, output_file);
                 }
 
-                self.final_message = last_agent_message.or_else(|| self.last_proposed_plan.clone());
+                self.final_message = resolve_final_message(
+                    last_agent_message,
+                    self.final_message.take(),
+                    self.last_proposed_plan.clone(),
+                );
 
                 return CodexStatus::InitiateShutdown;
             }
@@ -692,6 +701,21 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
                 return CodexStatus::InitiateShutdown;
             }
+            EventMsg::ExitedReviewMode(review_event) => {
+                let review_text = review_event
+                    .review_output
+                    .as_ref()
+                    .map(render_review_output_text)
+                    .unwrap_or_else(|| REVIEW_INTERRUPTED_MESSAGE.to_string());
+                if self.final_message.is_none() {
+                    self.final_message = Some(review_text);
+                }
+                ts_msg!(
+                    self,
+                    "{}",
+                    "review complete, finalizing output".style(self.dimmed)
+                );
+            }
             EventMsg::ContextCompacted(_) => {
                 ts_msg!(self, "context compacted");
             }
@@ -874,7 +898,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::RawResponseItem(_)
             | EventMsg::UserMessage(_)
             | EventMsg::EnteredReviewMode(_)
-            | EventMsg::ExitedReviewMode(_)
             | EventMsg::AgentMessageDelta(_)
             | EventMsg::AgentReasoningDelta(_)
             | EventMsg::AgentReasoningRawContentDelta(_)
@@ -1036,7 +1059,6 @@ impl EventProcessorWithHumanOutput {
                     | EventMsg::RawResponseItem(_)
                     | EventMsg::UserMessage(_)
                     | EventMsg::EnteredReviewMode(_)
-                    | EventMsg::ExitedReviewMode(_)
                     | EventMsg::AgentMessageDelta(_)
                     | EventMsg::AgentReasoningDelta(_)
                     | EventMsg::AgentReasoningRawContentDelta(_)
@@ -1165,6 +1187,22 @@ fn should_print_final_message_to_stdout(
     stderr_is_terminal: bool,
 ) -> bool {
     final_message.is_some() && !(stdout_is_terminal && stderr_is_terminal)
+}
+
+fn resolved_last_message_for_output<'a>(
+    last_agent_message: Option<&'a str>,
+    final_message: Option<&'a str>,
+    last_proposed_plan: Option<&'a str>,
+) -> Option<&'a str> {
+    last_agent_message.or(final_message).or(last_proposed_plan)
+}
+
+fn resolve_final_message(
+    last_agent_message: Option<String>,
+    final_message: Option<String>,
+    last_proposed_plan: Option<String>,
+) -> Option<String> {
+    last_agent_message.or(final_message).or(last_proposed_plan)
 }
 
 struct AgentJobProgressStats {
@@ -1354,6 +1392,8 @@ mod tests {
     use codex_protocol::protocol::TurnCompleteEvent;
 
     use super::EventProcessorWithHumanOutput;
+    use super::resolve_final_message;
+    use super::resolved_last_message_for_output;
     use super::should_print_final_message_to_stdout;
     use crate::event_processor::CodexStatus;
     use crate::event_processor::EventProcessor;
@@ -1410,6 +1450,22 @@ mod tests {
     }
 
     #[test]
+    fn resolved_last_message_for_output_preserves_existing_final_message() {
+        assert_eq!(
+            resolved_last_message_for_output(None, Some("review text"), None),
+            Some("review text")
+        );
+    }
+
+    #[test]
+    fn resolve_final_message_preserves_existing_final_message() {
+        assert_eq!(
+            resolve_final_message(None, Some("review text".to_string()), None),
+            Some("review text".to_string())
+        );
+    }
+
+    #[test]
     fn hook_started_with_status_message_is_not_silent() {
         let event = HookStartedEvent {
             turn_id: Some("turn-1".to_string()),
@@ -1452,6 +1508,15 @@ mod tests {
 
         assert!(EventProcessorWithHumanOutput::is_silent_event(
             &EventMsg::HookCompleted(event)
+        ));
+    }
+
+    #[test]
+    fn exited_review_mode_is_not_silent() {
+        assert!(!EventProcessorWithHumanOutput::is_silent_event(
+            &EventMsg::ExitedReviewMode(codex_protocol::protocol::ExitedReviewModeEvent {
+                review_output: None,
+            })
         ));
     }
 
