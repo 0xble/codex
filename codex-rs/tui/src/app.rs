@@ -965,19 +965,23 @@ fn compute_title_context(
     show_spinner: bool,
     tick: u128,
 ) -> Option<String> {
-    let identity = normalize_title_segment(thread_name)
+    let idle_identity = normalize_title_segment(thread_name.clone())
         .or_else(|| normalize_title_segment(persisted_thread_name))
-        .or_else(|| normalize_title_segment(work_hint));
+        .or_else(|| normalize_title_segment(work_hint.clone()));
     let status = normalize_title_segment(status_header)
         .filter(|status| !status.eq_ignore_ascii_case("working"));
     if !task_running {
-        return identity;
+        return idle_identity;
     }
+
+    let running_identity = normalize_title_segment(work_hint)
+        .or_else(|| normalize_title_segment(thread_name))
+        .or(idle_identity);
 
     let title = focus
         .map(|focus| focus.label().to_string())
         .or(status)
-        .or(identity)
+        .or(running_identity)
         .unwrap_or_else(|| DEFAULT_TITLE_IDENTITY.to_string());
 
     if show_spinner {
@@ -6617,12 +6621,29 @@ mod tests {
     }
 
     #[test]
-    fn title_context_falls_back_to_identity_when_running_without_focus_or_status() {
+    fn title_context_prefers_work_hint_over_thread_name_while_running() {
         assert_eq!(
             compute_title_context(
                 Some("named thread".to_string()),
                 None,
                 Some("draft focus".to_string()),
+                Some("Working".to_string()),
+                None,
+                true,
+                false,
+                0,
+            ),
+            Some("draft focus".to_string())
+        );
+    }
+
+    #[test]
+    fn title_context_falls_back_to_thread_name_when_running_without_work_hint() {
+        assert_eq!(
+            compute_title_context(
+                Some("named thread".to_string()),
+                None,
+                None,
                 Some("Working".to_string()),
                 None,
                 true,

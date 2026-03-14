@@ -141,6 +141,58 @@ async fn helpers_are_available_and_do_not_panic() {
     let _ = &mut w;
 }
 
+#[test]
+fn work_title_hint_summarizes_first_prompt_concisely() {
+    assert_eq!(
+        ChatWidget::debug_build_work_title_hint(
+            "fix after entering first prompt, codex title doesnt change as expected",
+        ),
+        Some("Fix First Prompt Title".to_string())
+    );
+}
+
+#[test]
+fn work_title_hint_stays_within_expected_length() {
+    let title = ChatWidget::debug_build_work_title_hint(
+        "investigate why the terminal title keeps mirroring the full prompt text instead of a short summary",
+    )
+    .expect("expected title");
+
+    assert!(title.chars().count() <= 24, "{title}");
+}
+
+#[test]
+fn work_title_similarity_keeps_same_focus_wording_stable() {
+    assert_eq!(
+        ChatWidget::debug_work_title_similarity(
+            "fix first prompt title behavior in tui",
+            "fix prompt title casing rules",
+        ),
+        Some(true)
+    );
+}
+
+#[tokio::test]
+async fn work_title_hint_only_promotes_after_a_confirmed_shift() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let (current, pending) = chat.debug_work_title_state_after(&[
+        "fix first prompt title behavior in tui",
+        "fix prompt title casing rules",
+    ]);
+    assert_eq!(current, Some("Fix First Prompt Title".to_string()));
+    assert_eq!(pending, None);
+
+    let (current, pending) =
+        chat.debug_work_title_state_after(&["refresh status snapshots after runtime qa"]);
+    assert_eq!(current, Some("Fix First Prompt Title".to_string()));
+    assert_eq!(pending, Some("Refresh Status Snapshot".to_string()));
+
+    let (current, pending) = chat.debug_work_title_state_after(&["update status snapshot qa"]);
+    assert_eq!(current, Some("Update Status Snapshot".to_string()));
+    assert_eq!(pending, None);
+}
+
 #[tokio::test]
 async fn prefetch_rate_limits_is_gated_on_chatgpt_auth_provider() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
