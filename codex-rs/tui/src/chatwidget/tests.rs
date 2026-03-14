@@ -2015,6 +2015,28 @@ async fn work_title_hint_only_promotes_after_a_confirmed_shift() {
     assert_eq!(pending, None);
 }
 
+#[tokio::test]
+async fn work_title_hint_retitles_only_after_a_repeated_natural_shift() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let (current, pending) = chat.debug_work_title_state_after(&[
+        "fix first prompt title behavior in tui",
+        "fix terminal prompt title handling and header naming",
+    ]);
+    assert_eq!(current, Some("Fix First Prompt Title".to_string()));
+    assert_eq!(pending, None);
+
+    let (current, pending) =
+        chat.debug_work_title_state_after(&["refresh status snapshot expectations and headers"]);
+    assert_eq!(current, Some("Fix First Prompt Title".to_string()));
+    assert_eq!(pending, Some("Refresh Status Snapshot".to_string()));
+
+    let (current, pending) =
+        chat.debug_work_title_state_after(&["update status snapshot header rendering"]);
+    assert_eq!(current, Some("Update Status Snapshot".to_string()));
+    assert_eq!(pending, None);
+}
+
 fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
     while let Ok(op) = op_rx.try_recv() {
         assert!(

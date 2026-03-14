@@ -321,7 +321,7 @@ const WORK_TITLE_MAX_WORDS: usize = 4;
 struct WorkTitleHint {
     title: String,
     action: Option<String>,
-    title_keywords: Vec<String>,
+    keywords: Vec<String>,
 }
 
 // Track information about an in-flight exec command.
@@ -9267,15 +9267,10 @@ impl ChatWidget {
             return None;
         }
 
-        let title_keywords = Self::work_title_raw_tokens(&title)
-            .into_iter()
-            .map(|token| Self::normalize_work_title_token(&token))
-            .collect();
-
         Some(WorkTitleHint {
             title,
             action: leading_action,
-            title_keywords,
+            keywords,
         })
     }
 
@@ -9337,13 +9332,13 @@ impl ChatWidget {
         let left_action = left.action.as_deref();
         let right_action = right.action.as_deref();
         let left_keywords: HashSet<&str> = left
-            .title_keywords
+            .keywords
             .iter()
             .map(String::as_str)
             .filter(|keyword| Some(*keyword) != left_action)
             .collect();
         let right_keywords: HashSet<&str> = right
-            .title_keywords
+            .keywords
             .iter()
             .map(String::as_str)
             .filter(|keyword| Some(*keyword) != right_action)
@@ -9354,12 +9349,12 @@ impl ChatWidget {
         }
 
         let left_primary = left
-            .title_keywords
+            .keywords
             .iter()
             .map(String::as_str)
             .find(|keyword| Some(*keyword) != left_action);
         let right_primary = right
-            .title_keywords
+            .keywords
             .iter()
             .map(String::as_str)
             .find(|keyword| Some(*keyword) != right_action);
