@@ -1924,6 +1924,7 @@ async fn make_chatwidget_manual(
         feedback_audience: FeedbackAudience::External,
         current_rollout_path: None,
         current_cwd: None,
+        submitted_work_title_hint: None,
         session_network_proxy: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         status_line_branch: None,
@@ -5226,7 +5227,7 @@ async fn unified_exec_wait_replaces_reasoning_header_with_background_status() {
         stdin: String::new(),
     });
 
-    assert_eq!(chat.current_status_header, "Working in background");
+    assert_eq!(chat.current_status.header, "Working in background");
     let status = chat
         .bottom_pane
         .status_widget()
@@ -5248,7 +5249,7 @@ async fn unified_exec_wait_allows_later_reasoning_headers() {
     });
     chat.on_agent_reasoning_delta("**Planning** follow-up".to_string());
 
-    assert_eq!(chat.current_status_header, "Planning");
+    assert_eq!(chat.current_status.header, "Planning");
     let status = chat
         .bottom_pane
         .status_widget()
@@ -5275,7 +5276,7 @@ async fn unified_exec_wait_repeated_polls_keep_later_reasoning_header() {
         stdin: String::new(),
     });
 
-    assert_eq!(chat.current_status_header, "Planning");
+    assert_eq!(chat.current_status.header, "Planning");
     let status = chat
         .bottom_pane
         .status_widget()
