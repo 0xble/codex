@@ -216,11 +216,19 @@ impl FromArgMatches for ResumeArgs {
 
 #[derive(Parser, Debug)]
 pub struct ReviewArgs {
+    /// Review only staged changes.
+    #[arg(
+        long = "staged",
+        default_value_t = false,
+        conflicts_with_all = ["uncommitted", "base", "commit", "prompt"]
+    )]
+    pub staged: bool,
+
     /// Review staged, unstaged, and untracked changes.
     #[arg(
         long = "uncommitted",
         default_value_t = false,
-        conflicts_with_all = ["base", "commit", "prompt"]
+        conflicts_with_all = ["staged", "base", "commit", "prompt"]
     )]
     pub uncommitted: bool,
 
@@ -228,7 +236,7 @@ pub struct ReviewArgs {
     #[arg(
         long = "base",
         value_name = "BRANCH",
-        conflicts_with_all = ["uncommitted", "commit", "prompt"]
+        conflicts_with_all = ["staged", "uncommitted", "commit", "prompt"]
     )]
     pub base: Option<String>,
 
@@ -236,7 +244,7 @@ pub struct ReviewArgs {
     #[arg(
         long = "commit",
         value_name = "SHA",
-        conflicts_with_all = ["uncommitted", "base", "prompt"]
+        conflicts_with_all = ["staged", "uncommitted", "base", "prompt"]
     )]
     pub commit: Option<String>,
 
@@ -261,6 +269,7 @@ pub enum Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -314,5 +323,16 @@ mod tests {
         };
         assert_eq!(args.session_id.as_deref(), Some("session-123"));
         assert_eq!(args.prompt.as_deref(), Some(PROMPT));
+    }
+
+    #[test]
+    fn review_accepts_staged_flag() {
+        let cli = Cli::parse_from(["codex-exec", "review", "--staged"]);
+
+        let Some(Command::Review(args)) = cli.command else {
+            panic!("expected review command");
+        };
+        assert!(args.staged);
+        assert!(!args.uncommitted);
     }
 }
