@@ -292,13 +292,6 @@
         }
       ]
     },
-    "AutoModeInstructionsMergeStrategy": {
-      "enum": [
-        "replace",
-        "append"
-      ],
-      "type": "string"
-    },
     "BundledSkillsConfig": {
       "additionalProperties": false,
       "properties": {
@@ -321,12 +314,6 @@
         },
         "approvals_reviewer": {
           "$ref": "#/definitions/ApprovalsReviewer"
-        },
-        "auto_mode_instructions": {
-          "type": "string"
-        },
-        "auto_mode_instructions_merge_strategy": {
-          "$ref": "#/definitions/AutoModeInstructionsMergeStrategy"
         },
         "chatgpt_base_url": {
           "type": "string"
@@ -590,6 +577,12 @@
         },
         "service_tier": {
           "$ref": "#/definitions/ServiceTier"
+        },
+        "thread_title_model": {
+          "type": "string"
+        },
+        "thread_title_reasoning_effort": {
+          "$ref": "#/definitions/ReasoningEffort"
         },
         "tools": {
           "$ref": "#/definitions/ToolsToml"
@@ -1965,12 +1958,6 @@
       "default": null,
       "description": "Machine-local realtime audio device preferences used by realtime voice."
     },
-    "auto_mode_instructions": {
-      "type": "string"
-    },
-    "auto_mode_instructions_merge_strategy": {
-      "$ref": "#/definitions/AutoModeInstructionsMergeStrategy"
-    },
     "background_terminal_max_timeout": {
       "description": "Maximum poll window for background terminal output (`write_stdin`), in milliseconds. Default: `300000` (5 minutes).",
       "format": "uint64",
@@ -2583,6 +2570,12 @@
     "suppress_unstable_features_warning": {
       "description": "Suppress warnings about unstable (under development) features.",
       "type": "boolean"
+    },
+    "thread_title_model": {
+      "type": "string"
+    },
+    "thread_title_reasoning_effort": {
+      "$ref": "#/definitions/ReasoningEffort"
     },
     "tool_output_token_limit": {
       "description": "Token budget applied when storing tool/function outputs in the context manager.",

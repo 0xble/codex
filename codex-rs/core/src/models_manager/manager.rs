@@ -258,7 +258,7 @@ impl ModelsManager {
     ///
     /// Returns a static set of presets seeded with the configured model.
     pub fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
-        self.list_collaboration_modes_for_config(self.collaboration_modes_config.clone())
+        self.list_collaboration_modes_for_config(self.collaboration_modes_config)
     }
 
     pub fn list_collaboration_modes_for_config(

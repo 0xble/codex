@@ -1,4 +1,3 @@
-use crate::config::types::AutoModeInstructionsMergeStrategy;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::TUI_VISIBLE_COLLABORATION_MODES;
@@ -9,7 +8,6 @@ use std::sync::LazyLock;
 const COLLABORATION_MODE_PLAN: &str = include_str!("../../templates/collaboration_mode/plan.md");
 const COLLABORATION_MODE_DEFAULT: &str =
     include_str!("../../templates/collaboration_mode/default.md");
-const COLLABORATION_MODE_AUTO: &str = include_str!("../../templates/collaboration_mode/auto.md");
 const KNOWN_MODE_NAMES_TEMPLATE_KEY: &str = "KNOWN_MODE_NAMES";
 const REQUEST_USER_INPUT_AVAILABILITY_TEMPLATE_KEY: &str = "REQUEST_USER_INPUT_AVAILABILITY";
 const ASKING_QUESTIONS_GUIDANCE_TEMPLATE_KEY: &str = "ASKING_QUESTIONS_GUIDANCE";
@@ -17,34 +15,22 @@ static COLLABORATION_MODE_DEFAULT_TEMPLATE: LazyLock<Template> = LazyLock::new(|
     Template::parse(COLLABORATION_MODE_DEFAULT)
         .unwrap_or_else(|err| panic!("collaboration mode default template must parse: {err}"))
 });
-static COLLABORATION_MODE_AUTO_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    Template::parse(COLLABORATION_MODE_AUTO)
-        .unwrap_or_else(|err| panic!("collaboration mode auto template must parse: {err}"))
-});
 
 /// Stores feature flags that control collaboration-mode behavior.
 ///
 /// Keep mode-related flags here so new collaboration-mode capabilities can be
 /// added without large cross-cutting diffs to constructor and call-site
 /// signatures.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CollaborationModesConfig {
     /// Enables `request_user_input` availability in Default mode.
     pub default_mode_request_user_input: bool,
-    /// Optional Auto-mode instruction override for the built-in Auto preset.
-    pub auto_mode_instructions: Option<String>,
-    /// Controls how custom Auto-mode instructions interact with the built-in preset.
-    pub auto_mode_instructions_merge_strategy: AutoModeInstructionsMergeStrategy,
 }
 
 pub fn builtin_collaboration_mode_presets(
     collaboration_modes_config: CollaborationModesConfig,
 ) -> Vec<CollaborationModeMask> {
-    vec![
-        default_preset(collaboration_modes_config.clone()),
-        plan_preset(),
-        auto_preset(collaboration_modes_config),
-    ]
+    vec![plan_preset(), default_preset(collaboration_modes_config)]
 }
 
 fn plan_preset() -> CollaborationModeMask {
@@ -64,16 +50,6 @@ fn default_preset(collaboration_modes_config: CollaborationModesConfig) -> Colla
         model: None,
         reasoning_effort: None,
         developer_instructions: Some(Some(default_mode_instructions(collaboration_modes_config))),
-    }
-}
-
-fn auto_preset(collaboration_modes_config: CollaborationModesConfig) -> CollaborationModeMask {
-    CollaborationModeMask {
-        name: ModeKind::Auto.display_name().to_string(),
-        mode: Some(ModeKind::Auto),
-        model: None,
-        reasoning_effort: None,
-        developer_instructions: Some(Some(auto_mode_instructions(collaboration_modes_config))),
     }
 }
 
@@ -99,27 +75,6 @@ fn default_mode_instructions(collaboration_modes_config: CollaborationModesConfi
             ),
         ])
         .unwrap_or_else(|err| panic!("collaboration mode default template must render: {err}"))
-}
-
-fn auto_mode_instructions(collaboration_modes_config: CollaborationModesConfig) -> String {
-    let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
-    let builtin = COLLABORATION_MODE_AUTO_TEMPLATE
-        .render([(KNOWN_MODE_NAMES_TEMPLATE_KEY, known_mode_names.as_str())])
-        .unwrap_or_else(|err| panic!("collaboration mode auto template must render: {err}"));
-    let Some(custom) = collaboration_modes_config.auto_mode_instructions else {
-        return builtin;
-    };
-
-    match collaboration_modes_config.auto_mode_instructions_merge_strategy {
-        AutoModeInstructionsMergeStrategy::Replace => custom,
-        AutoModeInstructionsMergeStrategy::Append => {
-            if custom.is_empty() {
-                builtin
-            } else {
-                format!("{builtin}\n\n{custom}")
-            }
-        }
-    }
 }
 
 fn format_mode_names(modes: &[ModeKind]) -> String {

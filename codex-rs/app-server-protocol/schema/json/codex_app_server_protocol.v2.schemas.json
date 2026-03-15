@@ -3070,6 +3070,22 @@
             }
           ]
         },
+        "thread_title_model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thread_title_reasoning_effort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "tools": {
           "anyOf": [
             {
@@ -6060,8 +6076,7 @@
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
         "plan",
-        "default",
-        "auto"
+        "default"
       ],
       "type": "string"
     },
@@ -7047,6 +7062,22 @@
           "anyOf": [
             {
               "$ref": "#/definitions/ServiceTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thread_title_model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thread_title_reasoning_effort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
             },
             {
               "type": "null"

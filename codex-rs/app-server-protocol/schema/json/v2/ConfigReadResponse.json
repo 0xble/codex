@@ -360,6 +360,22 @@
             }
           ]
         },
+        "thread_title_model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thread_title_reasoning_effort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "tools": {
           "anyOf": [
             {
@@ -660,6 +676,22 @@
           "anyOf": [
             {
               "$ref": "#/definitions/ServiceTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thread_title_model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thread_title_reasoning_effort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
             },
             {
               "type": "null"

@@ -1012,38 +1012,17 @@ async fn collab_mode_shift_tab_cycles_only_when_idle() {
     assert_eq!(chat.current_collaboration_mode(), &initial);
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Auto);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
     assert_eq!(chat.current_collaboration_mode(), &initial);
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert_eq!(chat.current_collaboration_mode(), &initial);
 
     chat.on_task_started();
     let before = chat.active_collaboration_mode_kind();
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
     assert_eq!(chat.active_collaboration_mode_kind(), before);
-}
-
-#[tokio::test]
-async fn shift_tab_entering_auto_emits_permissions_warning() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
-    drain_insert_history(&mut rx);
-
-    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
-
-    let rendered = drain_insert_history(&mut rx)
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Auto);
-    assert!(
-        rendered.contains("Auto mode may be constrained by current permissions."),
-        "expected auto warning after shift+tab, got {rendered:?}"
-    );
 }
 
 #[tokio::test]
@@ -1120,7 +1099,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
     );
     assert!(popup.contains("Default"), "expected Default in picker: {popup}");
     assert!(popup.contains("Plan"), "expected Plan in picker: {popup}");
-    assert!(popup.contains("Auto"), "expected Auto in picker: {popup}");
+    assert!(!popup.contains("Auto"), "did not expect Auto in picker: {popup}");
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     let selected_mask = match rx.try_recv() {
@@ -1164,34 +1143,6 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
             panic!("expected Op::UserTurn with code collab mode, got {other:?}")
         }
     }
-}
-
-#[tokio::test]
-async fn collab_picker_selecting_auto_emits_permissions_warning() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
-
-    chat.dispatch_command(SlashCommand::Collab);
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-
-    let selected_mask = match rx.try_recv() {
-        Ok(AppEvent::UpdateCollaborationMode(mask)) => mask,
-        other => panic!("expected UpdateCollaborationMode event, got {other:?}"),
-    };
-    assert_eq!(selected_mask.mode, Some(ModeKind::Auto));
-    chat.set_collaboration_mask(selected_mask);
-
-    let rendered = drain_insert_history(&mut rx)
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        rendered.contains("Auto mode may be constrained by current permissions."),
-        "expected auto warning after /collab selection, got {rendered:?}"
-    );
 }
 
 #[tokio::test]
@@ -1259,89 +1210,6 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
 }
 
-#[tokio::test]
-async fn auto_slash_command_toggles_auto_and_default() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
-
-    chat.dispatch_command(SlashCommand::Auto);
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Auto);
-    let rendered = drain_insert_history(&mut rx)
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        rendered.contains("Auto mode may be constrained by current permissions."),
-        "expected restrictive-permissions warning, got {rendered:?}"
-    );
-
-    chat.dispatch_command(SlashCommand::Auto);
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
-}
-
-#[tokio::test]
-async fn auto_slash_command_with_args_is_rejected() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
-
-    chat.bottom_pane
-        .set_composer_text("/auto now".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-
-    let rendered = drain_insert_history(&mut rx)
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        rendered.contains("Usage: /auto"),
-        "expected /auto args rejection, got {rendered:?}"
-    );
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
-}
-
-#[tokio::test]
-async fn auto_slash_command_is_disabled_while_task_running() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
-    chat.on_task_started();
-
-    chat.dispatch_command(SlashCommand::Auto);
-
-    let rendered = drain_insert_history(&mut rx)
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        rendered.contains("'/auto' is disabled while a task is in progress."),
-        "expected running-task rejection, got {rendered:?}"
-    );
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
-}
-
-#[tokio::test]
-async fn auto_slash_command_skips_warning_under_full_access() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
-    chat.set_approval_policy(AskForApproval::Never);
-    chat.set_sandbox_policy(SandboxPolicy::DangerFullAccess)
-        .expect("set full access sandbox");
-
-    chat.dispatch_command(SlashCommand::Auto);
-
-    let rendered = drain_insert_history(&mut rx)
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Auto);
-    assert!(
-        !rendered.contains("Auto mode may be constrained by current permissions."),
-        "did not expect auto warning under full access, got {rendered:?}"
-    );
-}
 
 #[tokio::test]
 async fn collaboration_modes_defaults_to_code_on_startup() {

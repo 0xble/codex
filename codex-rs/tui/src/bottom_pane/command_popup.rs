@@ -346,10 +346,6 @@ mod tests {
             !cmds.contains(&"plan"),
             "expected '/plan' to be hidden when collaboration modes are disabled, got {cmds:?}"
         );
-        assert!(
-            !cmds.contains(&"auto"),
-            "expected '/auto' to be hidden when collaboration modes are disabled, got {cmds:?}"
-        );
     }
 
     #[test]
@@ -389,28 +385,6 @@ mod tests {
         match popup.selected_item() {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "plan"),
             other => panic!("expected plan to be selected for exact match, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn auto_command_visible_when_collaboration_modes_enabled() {
-        let mut popup = CommandPopup::new(
-            Vec::new(),
-            CommandPopupFlags {
-                collaboration_modes_enabled: true,
-                connectors_enabled: false,
-                fast_command_enabled: false,
-                personality_command_enabled: true,
-                realtime_conversation_enabled: false,
-                audio_device_selection_enabled: false,
-                windows_degraded_sandbox_active: false,
-            },
-        );
-        popup.on_composer_text_change("/auto".to_string());
-
-        match popup.selected_item() {
-            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "auto"),
-            other => panic!("expected auto to be selected for exact match, got {other:?}"),
         }
     }
 

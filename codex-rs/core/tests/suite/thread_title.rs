@@ -18,7 +18,7 @@ use wiremock::MockServer;
 use wiremock::matchers::body_string_contains;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn first_turn_title_uses_active_model_and_claude_prompt() -> anyhow::Result<()> {
+async fn first_turn_title_uses_thread_title_model_and_low_reasoning() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
@@ -48,7 +48,11 @@ async fn first_turn_title_uses_active_model_and_claude_prompt() -> anyhow::Resul
     )
     .await;
 
-    let test = test_codex().with_model("gpt-5.1").build(&server).await?;
+    let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
+        config.thread_title_model = Some("gpt-5.1".to_string());
+        config.thread_title_reasoning_effort = None;
+    });
+    let test = builder.build(&server).await?;
 
     test.codex
         .submit(Op::UserTurn {
@@ -100,7 +104,7 @@ async fn first_turn_title_uses_active_model_and_claude_prompt() -> anyhow::Resul
         .unwrap();
     assert_eq!(
         title_request.body_json()["reasoning"]["effort"].as_str(),
-        Some("none")
+        Some("low")
     );
     assert!(
         title_request
@@ -118,6 +122,109 @@ async fn first_turn_title_uses_active_model_and_claude_prompt() -> anyhow::Resul
 
     let turn_request = turn_mock.single_request();
     assert_eq!(turn_request.body_json()["model"].as_str(), Some("gpt-5.1"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_turn_title_falls_back_to_session_model_when_unset() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+
+    let title_mock = mount_sse_once_match(
+        &server,
+        body_string_contains("Generate a concise, sentence-case title (3-7 words)"),
+        sse(vec![
+            ev_response_created("resp-title"),
+            ev_assistant_message("msg-title", "{\"title\":\"Keep session model for titles\"}"),
+            ev_completed("resp-title"),
+        ]),
+    )
+    .await;
+
+    let turn_mock = mount_sse_once_match(
+        &server,
+        body_string_contains("\"model\":\"gpt-5.3-codex\""),
+        sse(vec![
+            ev_response_created("resp-turn"),
+            ev_assistant_message("msg-turn", "done"),
+            ev_completed("resp-turn"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.3-codex")
+        .with_config(|config| {
+            config.thread_title_model = None;
+            config.thread_title_reasoning_effort = None;
+        });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "keep the session model for title generation".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let title_event = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ThreadNameUpdated(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        title_event.thread_name.as_deref(),
+        Some("Keep session model for titles")
+    );
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let title_request = title_mock
+        .requests()
+        .into_iter()
+        .find(|request| {
+            request
+                .message_input_texts("user")
+                .iter()
+                .any(|text| text.contains("Working directory:"))
+        })
+        .expect("expected a title-generation request");
+    assert_eq!(
+        title_request.body_json()["model"].as_str(),
+        Some("gpt-5.3-codex")
+    );
+
+    let turn_request = turn_mock
+        .requests()
+        .into_iter()
+        .find(|request| {
+            request
+                .message_input_texts("user")
+                .iter()
+                .all(|text| !text.contains("Working directory:"))
+        })
+        .expect("expected a non-title turn request");
+    assert_eq!(
+        turn_request.body_json()["model"].as_str(),
+        Some("gpt-5.3-codex")
+    );
 
     Ok(())
 }

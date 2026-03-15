@@ -5,7 +5,6 @@ use crate::client_common::Prompt;
 use crate::config::Config;
 use crate::models_manager::manager::RefreshStrategy;
 use crate::state::SessionServices;
-use crate::util::normalize_thread_name;
 use codex_otel::SessionTelemetry;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::BaseInstructions;
@@ -61,6 +60,7 @@ pub(crate) async fn generate_thread_title(
         .models_manager
         .get_model_info(model.as_str(), config)
         .await;
+    let reasoning_effort = resolve_title_reasoning_effort(config, &model_info);
 
     let prompt = build_generation_prompt(format!(
         "Working directory: {}\nUser request: {}",
@@ -72,6 +72,7 @@ pub(crate) async fn generate_thread_title(
         &mut client_session,
         &prompt,
         &model_info,
+        reasoning_effort,
         &services.session_telemetry,
     )
     .await?;
@@ -126,6 +127,7 @@ async fn collect_model_text(
     client_session: &mut ModelClientSession,
     prompt: &Prompt,
     model_info: &ModelInfo,
+    reasoning_effort: Option<ReasoningEffort>,
     session_telemetry: &SessionTelemetry,
 ) -> Option<String> {
     let mut stream = match client_session
@@ -133,7 +135,7 @@ async fn collect_model_text(
             prompt,
             model_info,
             session_telemetry,
-            Some(ReasoningEffort::None),
+            reasoning_effort,
             ReasoningSummary::None,
             None,
             None,
@@ -189,6 +191,14 @@ fn title_output_schema() -> serde_json::Value {
 
 fn resolve_title_model(config: &Config, models: &[ModelPreset]) -> Option<String> {
     if let Some(model) = config
+        .thread_title_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        return Some(model.to_string());
+    }
+    if let Some(model) = config
         .model
         .as_deref()
         .map(str::trim)
@@ -201,6 +211,20 @@ fn resolve_title_model(config: &Config, models: &[ModelPreset]) -> Option<String
         .find(|model| model.is_default)
         .or_else(|| models.first())
         .map(|model| model.model.clone())
+}
+
+fn resolve_title_reasoning_effort(
+    config: &Config,
+    model_info: &ModelInfo,
+) -> Option<ReasoningEffort> {
+    config.thread_title_reasoning_effort.or_else(|| {
+        model_info
+            .supported_reasoning_levels
+            .iter()
+            .any(|preset| preset.effort == ReasoningEffort::Low)
+            .then_some(ReasoningEffort::Low)
+            .or(model_info.default_reasoning_level)
+    })
 }
 
 fn title_fits_constraints(title: &str) -> bool {
@@ -235,7 +259,8 @@ fn sanitize_generated_title(title: &str) -> Option<String> {
         }
     }
     let title = title.trim().trim_end_matches('.').trim();
-    normalize_thread_name(&collapse_whitespace(title))
+    let title = collapse_whitespace(title);
+    (!title.is_empty()).then_some(title)
 }
 
 fn collapse_whitespace(value: &str) -> String {
@@ -330,6 +355,44 @@ mod tests {
         }
     }
 
+    fn model_info(
+        default_reasoning_level: Option<ReasoningEffort>,
+        supported_reasoning_levels: Vec<ReasoningEffortPreset>,
+    ) -> ModelInfo {
+        ModelInfo {
+            slug: "gpt-5.4".to_string(),
+            display_name: "gpt-5.4".to_string(),
+            description: None,
+            default_reasoning_level,
+            supported_reasoning_levels,
+            shell_type: codex_protocol::openai_models::ConfigShellToolType::Default,
+            visibility: codex_protocol::openai_models::ModelVisibility::List,
+            supported_in_api: true,
+            priority: 0,
+            availability_nux: None,
+            upgrade: None,
+            base_instructions: String::new(),
+            model_messages: None,
+            supports_reasoning_summaries: false,
+            default_reasoning_summary: codex_protocol::config_types::ReasoningSummary::None,
+            support_verbosity: false,
+            default_verbosity: None,
+            apply_patch_tool_type: None,
+            web_search_tool_type: codex_protocol::openai_models::WebSearchToolType::Text,
+            truncation_policy: codex_protocol::openai_models::TruncationPolicyConfig::bytes(20_000),
+            supports_parallel_tool_calls: true,
+            supports_image_detail_original: false,
+            context_window: None,
+            auto_compact_token_limit: None,
+            effective_context_window_percent: 95,
+            experimental_supported_tools: Vec::new(),
+            input_modalities: codex_protocol::openai_models::default_input_modalities(),
+            prefer_websockets: false,
+            used_fallback_model_metadata: false,
+            supports_search_tool: false,
+        }
+    }
+
     #[test]
     fn compact_title_prompt_strips_agents_wrapper_prefix() {
         let raw = "# AGENTS.md instructions for /Users/brianle\n<INSTRUCTIONS>\nUse the rules.\n</INSTRUCTIONS>\n<environment_context>\n  <cwd>/Users/brianle</cwd>\n</environment_context>\ncreate a new ai subcommand for recalling sessions";
@@ -353,13 +416,25 @@ mod tests {
     }
 
     #[test]
-    fn resolve_title_model_prefers_configured_model() {
+    fn resolve_title_model_prefers_thread_title_model_override() {
         let mut config = test_config();
-        config.model = Some("gpt-5.4".to_string());
+        config.model = Some("gpt-5.1".to_string());
+        config.thread_title_model = Some("gpt-5.4".to_string());
         let models = vec![preset("gpt-5.1-codex-mini", true)];
         assert_eq!(
             resolve_title_model(&config, &models).as_deref(),
             Some("gpt-5.4")
+        );
+    }
+
+    #[test]
+    fn resolve_title_model_falls_back_to_session_model() {
+        let mut config = test_config();
+        config.model = Some("gpt-5.3-codex".to_string());
+        let models = vec![preset("gpt-5.4", true), preset("gpt-5.3-codex", false)];
+        assert_eq!(
+            resolve_title_model(&config, &models).as_deref(),
+            Some("gpt-5.3-codex")
         );
     }
 
@@ -370,6 +445,70 @@ mod tests {
         assert_eq!(
             resolve_title_model(&config, &models).as_deref(),
             Some("gpt-5.4")
+        );
+    }
+
+    #[test]
+    fn resolve_title_reasoning_effort_prefers_configured_override() {
+        let mut config = test_config();
+        config.thread_title_reasoning_effort = Some(ReasoningEffort::Minimal);
+        let model_info = model_info(
+            Some(ReasoningEffort::High),
+            vec![
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Low,
+                    description: "low".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::High,
+                    description: "high".to_string(),
+                },
+            ],
+        );
+
+        assert_eq!(
+            resolve_title_reasoning_effort(&config, &model_info),
+            Some(ReasoningEffort::Minimal)
+        );
+    }
+
+    #[test]
+    fn resolve_title_reasoning_effort_prefers_low_when_supported() {
+        let config = test_config();
+        let model_info = model_info(
+            Some(ReasoningEffort::High),
+            vec![
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::Low,
+                    description: "low".to_string(),
+                },
+                ReasoningEffortPreset {
+                    effort: ReasoningEffort::High,
+                    description: "high".to_string(),
+                },
+            ],
+        );
+
+        assert_eq!(
+            resolve_title_reasoning_effort(&config, &model_info),
+            Some(ReasoningEffort::Low)
+        );
+    }
+
+    #[test]
+    fn resolve_title_reasoning_effort_falls_back_to_model_default() {
+        let config = test_config();
+        let model_info = model_info(
+            Some(ReasoningEffort::High),
+            vec![ReasoningEffortPreset {
+                effort: ReasoningEffort::High,
+                description: "high".to_string(),
+            }],
+        );
+
+        assert_eq!(
+            resolve_title_reasoning_effort(&config, &model_info),
+            Some(ReasoningEffort::High)
         );
     }
 
@@ -386,6 +525,31 @@ mod tests {
         assert_eq!(
             sanitize_generated_title("\"Fix login button on mobile.\"").as_deref(),
             Some("Fix login button on mobile")
+        );
+    }
+
+    #[test]
+    fn sanitize_generated_title_preserves_sentence_case() {
+        assert_eq!(
+            sanitize_generated_title("Fix login button on mobile").as_deref(),
+            Some("Fix login button on mobile")
+        );
+    }
+
+    #[test]
+    fn title_generation_instructions_match_claude_reverse_engineered_prompt() {
+        assert_eq!(
+            title_generation_instructions(),
+            r#"Generate a concise, sentence-case title (3-7 words) that captures the main topic or goal of this coding session. The title should be clear enough that the user recognizes the session in a list. Use sentence case: capitalize only the first word and proper nouns.
+Return JSON with a single "title" field.
+Good examples:
+{"title": "Fix login button on mobile"}
+{"title": "Add OAuth authentication"}
+{"title": "Debug failing CI tests"}
+{"title": "Refactor API client error handling"}
+Bad (too vague): {"title": "Code changes"}
+Bad (too long): {"title": "Investigate and fix the issue where the login button does not respond on mobile devices"}
+Bad (wrong case): {"title": "Fix Login Button On Mobile"}"#
         );
     }
 

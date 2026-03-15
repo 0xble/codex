@@ -2,7 +2,6 @@ use crate::auth::AuthCredentialsStoreMode;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::types::AppsConfigToml;
-use crate::config::types::AutoModeInstructionsMergeStrategy;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
@@ -232,6 +231,9 @@ pub struct Config {
 
     /// Model used specifically for review sessions.
     pub review_model: Option<String>,
+
+    /// Model used specifically for auto-generated thread titles.
+    pub thread_title_model: Option<String>,
 
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
@@ -464,6 +466,13 @@ pub struct Config {
     /// Value to use for `reasoning.effort` when making a request using the
     /// Responses API.
     pub model_reasoning_effort: Option<ReasoningEffort>,
+    /// Optional reasoning effort override used when auto-generating thread
+    /// titles.
+    ///
+    /// When unset, thread title generation prefers `low` when the selected
+    /// model supports it and otherwise falls back to that model's default
+    /// reasoning effort.
+    pub thread_title_reasoning_effort: Option<ReasoningEffort>,
     /// Optional Plan-mode-specific reasoning effort override used by the TUI.
     ///
     /// When unset, Plan mode uses the built-in Plan preset default (currently
@@ -471,15 +480,6 @@ pub struct Config {
     /// Plan preset. The `none` value means "no reasoning" (not "inherit the
     /// global default").
     pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
-    /// Optional Auto-mode instruction override used by the built-in Auto preset.
-    ///
-    /// When set, the override either replaces or appends to the built-in Auto
-    /// preset instructions, depending on `auto_mode_instructions_merge_strategy`.
-    pub auto_mode_instructions: Option<String>,
-    /// Controls how `auto_mode_instructions` interacts with the built-in Auto
-    /// preset instructions.
-    pub auto_mode_instructions_merge_strategy: AutoModeInstructionsMergeStrategy,
-
     /// Optional value to use for `reasoning.summary` when making a request
     /// using the Responses API. When unset, the model catalog default is used.
     pub model_reasoning_summary: Option<ReasoningSummary>,
@@ -1296,9 +1296,17 @@ pub struct ConfigToml {
     pub show_raw_agent_reasoning: Option<bool>,
 
     pub model_reasoning_effort: Option<ReasoningEffort>,
-    pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
+    pub thread_title_model: Option<String>,
+    pub thread_title_reasoning_effort: Option<ReasoningEffort>,
+    /// Deprecated: ignored compatibility shim for removed Auto mode config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub auto_mode_instructions: Option<String>,
-    pub auto_mode_instructions_merge_strategy: Option<AutoModeInstructionsMergeStrategy>,
+    /// Deprecated: ignored compatibility shim for removed Auto mode config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub auto_mode_instructions_merge_strategy: Option<String>,
+    pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
@@ -2499,6 +2507,10 @@ impl Config {
             .or(cfg.zsh_path.map(Into::into));
 
         let review_model = override_review_model.or(cfg.review_model);
+        let thread_title_model = config_profile
+            .thread_title_model
+            .clone()
+            .or(cfg.thread_title_model.clone());
 
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
         let model_catalog = load_model_catalog(
@@ -2599,6 +2611,7 @@ impl Config {
             model,
             service_tier,
             review_model,
+            thread_title_model,
             model_context_window: cfg.model_context_window,
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
             model_provider_id,
@@ -2678,16 +2691,12 @@ impl Config {
             model_reasoning_effort: config_profile
                 .model_reasoning_effort
                 .or(cfg.model_reasoning_effort),
+            thread_title_reasoning_effort: config_profile
+                .thread_title_reasoning_effort
+                .or(cfg.thread_title_reasoning_effort),
             plan_mode_reasoning_effort: config_profile
                 .plan_mode_reasoning_effort
                 .or(cfg.plan_mode_reasoning_effort),
-            auto_mode_instructions: config_profile
-                .auto_mode_instructions
-                .or(cfg.auto_mode_instructions),
-            auto_mode_instructions_merge_strategy: config_profile
-                .auto_mode_instructions_merge_strategy
-                .or(cfg.auto_mode_instructions_merge_strategy)
-                .unwrap_or_default(),
             model_reasoning_summary: config_profile
                 .model_reasoning_summary
                 .or(cfg.model_reasoning_summary),

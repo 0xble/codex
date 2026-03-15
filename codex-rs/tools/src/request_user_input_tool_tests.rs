@@ -120,13 +120,6 @@ fn request_user_input_unavailable_messages_respect_default_mode_feature_flag() {
     );
     assert_eq!(
         request_user_input_unavailable_message(
-            ModeKind::Auto,
-            /*default_mode_request_user_input*/ false
-        ),
-        Some("request_user_input is unavailable in Auto mode".to_string())
-    );
-    assert_eq!(
-        request_user_input_unavailable_message(
             ModeKind::Default,
             /*default_mode_request_user_input*/ true
         ),

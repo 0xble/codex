@@ -6826,6 +6826,25 @@ mod tests {
     }
 
     #[test]
+    fn title_context_preserves_sentence_case_canonical_title() {
+        assert_eq!(
+            compute_title_context(
+                None,
+                Some("Fix login button on mobile".to_string()),
+                Some("Fix login button on mobile".to_string()),
+                None,
+                Some("Working".to_string()),
+                None,
+                true,
+                false,
+                false,
+                0,
+            ),
+            Some("Fix login button on mobile".to_string())
+        );
+    }
+
+    #[test]
     fn title_context_falls_back_to_codex_when_running_without_any_context() {
         assert_eq!(
             compute_title_context(None, None, None, None, None, None, true, false, true, 2),
@@ -7723,152 +7742,6 @@ mod tests {
         assert_eq!(
             app.chat_widget.current_reasoning_effort(),
             Some(ReasoningEffortConfig::High)
-        );
-    }
-
-    #[tokio::test]
-    async fn replay_thread_snapshot_does_not_restore_auto_mode_for_draft_submit() {
-        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let thread_id = ThreadId::new();
-        let session_configured = Event {
-            id: "session-configured".to_string(),
-            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: thread_id,
-                forked_from_id: None,
-                thread_name: None,
-                model: "gpt-test".to_string(),
-                model_provider_id: "test-provider".to_string(),
-                service_tier: None,
-                approval_policy: AskForApproval::Never,
-                approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::DangerFullAccess,
-                cwd: PathBuf::from("/tmp/project"),
-                reasoning_effort: None,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: None,
-                network_proxy: None,
-                rollout_path: Some(PathBuf::new()),
-            }),
-        };
-        app.chat_widget
-            .handle_codex_event(session_configured.clone());
-        app.chat_widget
-            .apply_external_edit("draft prompt".to_string());
-        app.chat_widget
-            .set_collaboration_mask(CollaborationModeMask {
-                name: "Auto".to_string(),
-                mode: Some(ModeKind::Auto),
-                model: None,
-                reasoning_effort: None,
-                developer_instructions: None,
-            });
-        let input_state = app
-            .chat_widget
-            .capture_thread_input_state()
-            .expect("expected draft input state");
-
-        let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
-            make_chatwidget_manual_with_sender().await;
-        app.chat_widget = chat_widget;
-        app.chat_widget.handle_codex_event(session_configured);
-
-        app.replay_thread_snapshot(
-            ThreadEventSnapshot {
-                session_configured: None,
-                events: vec![],
-                input_state: Some(input_state),
-            },
-            true,
-        );
-        app.chat_widget
-            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        match next_user_turn_op(&mut new_op_rx) {
-            Op::UserTurn {
-                items,
-                collaboration_mode: None,
-                ..
-            } => assert_eq!(
-                items,
-                vec![UserInput::Text {
-                    text: "draft prompt".to_string(),
-                    text_elements: Vec::new(),
-                }]
-            ),
-            other => panic!("expected restored draft to submit in Default mode, got {other:?}"),
-        }
-        assert_eq!(
-            app.chat_widget.active_collaboration_mode_kind(),
-            ModeKind::Default
-        );
-        assert_eq!(
-            app.chat_widget.current_collaboration_mode().mode,
-            ModeKind::Default
-        );
-    }
-
-    #[tokio::test]
-    async fn replay_thread_snapshot_does_not_restore_auto_mode_without_input() {
-        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let thread_id = ThreadId::new();
-        let session_configured = Event {
-            id: "session-configured".to_string(),
-            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: thread_id,
-                forked_from_id: None,
-                thread_name: None,
-                model: "gpt-test".to_string(),
-                model_provider_id: "test-provider".to_string(),
-                service_tier: None,
-                approval_policy: AskForApproval::Never,
-                approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::DangerFullAccess,
-                cwd: PathBuf::from("/tmp/project"),
-                reasoning_effort: None,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: None,
-                network_proxy: None,
-                rollout_path: Some(PathBuf::new()),
-            }),
-        };
-        app.chat_widget
-            .handle_codex_event(session_configured.clone());
-        app.chat_widget
-            .set_collaboration_mask(CollaborationModeMask {
-                name: "Auto".to_string(),
-                mode: Some(ModeKind::Auto),
-                model: None,
-                reasoning_effort: None,
-                developer_instructions: None,
-            });
-        let input_state = app
-            .chat_widget
-            .capture_thread_input_state()
-            .expect("expected collaboration-only input state");
-
-        let (chat_widget, _app_event_tx, _rx, _new_op_rx) =
-            make_chatwidget_manual_with_sender().await;
-        app.chat_widget = chat_widget;
-        app.chat_widget.handle_codex_event(session_configured);
-
-        app.replay_thread_snapshot(
-            ThreadEventSnapshot {
-                session_configured: None,
-                events: vec![],
-                input_state: Some(input_state),
-            },
-            true,
-        );
-
-        assert_eq!(
-            app.chat_widget.active_collaboration_mode_kind(),
-            ModeKind::Default
-        );
-        assert_eq!(
-            app.chat_widget.current_collaboration_mode().mode,
-            ModeKind::Default
         );
     }
 

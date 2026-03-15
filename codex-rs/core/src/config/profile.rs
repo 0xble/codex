@@ -5,7 +5,6 @@ use serde::Serialize;
 
 use crate::config::ToolsToml;
 use crate::config::types::ApprovalsReviewer;
-use crate::config::types::AutoModeInstructionsMergeStrategy;
 use crate::config::types::Personality;
 use crate::config::types::WindowsToml;
 use crate::protocol::AskForApproval;
@@ -31,9 +30,17 @@ pub struct ConfigProfile {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_mode: Option<SandboxMode>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
-    pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
+    pub thread_title_model: Option<String>,
+    pub thread_title_reasoning_effort: Option<ReasoningEffort>,
+    /// Deprecated: ignored compatibility shim for removed Auto mode config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub auto_mode_instructions: Option<String>,
-    pub auto_mode_instructions_merge_strategy: Option<AutoModeInstructionsMergeStrategy>,
+    /// Deprecated: ignored compatibility shim for removed Auto mode config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub auto_mode_instructions_merge_strategy: Option<String>,
+    pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     /// Optional path to a JSON model catalog (applied on startup only).

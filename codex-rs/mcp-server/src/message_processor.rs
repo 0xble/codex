@@ -69,8 +69,6 @@ impl MessageProcessor {
                 default_mode_request_user_input: config
                     .features
                     .enabled(Feature::DefaultModeRequestUserInput),
-                auto_mode_instructions: config.auto_mode_instructions.clone(),
-                auto_mode_instructions_merge_strategy: config.auto_mode_instructions_merge_strategy,
             },
             environment_manager,
         ));
