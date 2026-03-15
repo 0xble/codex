@@ -9,16 +9,8 @@ fn preset_names_use_mode_display_names() {
         ModeKind::Default.display_name()
     );
     assert_eq!(
-        auto_preset(CollaborationModesConfig::default()).name,
-        ModeKind::Auto.display_name()
-    );
-    assert_eq!(
         plan_preset().reasoning_effort,
         Some(Some(ReasoningEffort::Medium))
-    );
-    assert_eq!(
-        auto_preset(CollaborationModesConfig::default()).reasoning_effort,
-        None
     );
 }
 
@@ -26,7 +18,6 @@ fn preset_names_use_mode_display_names() {
 fn default_mode_instructions_replace_mode_names_placeholder() {
     let default_instructions = default_preset(CollaborationModesConfig {
         default_mode_request_user_input: true,
-        ..Default::default()
     })
     .developer_instructions
     .expect("default preset should include instructions")
@@ -57,48 +48,4 @@ fn default_mode_instructions_use_plain_text_questions_when_feature_disabled() {
     assert!(
         default_instructions.contains("ask the user directly with a concise plain-text question")
     );
-}
-
-#[test]
-fn auto_mode_instructions_replace_mode_names_placeholder() {
-    let auto_instructions = auto_preset(CollaborationModesConfig::default())
-        .developer_instructions
-        .expect("auto preset should include instructions")
-        .expect("auto instructions should be set");
-
-    assert!(!auto_instructions.contains(KNOWN_MODE_NAMES_PLACEHOLDER));
-
-    let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
-    let expected_snippet = format!("Known mode names are {known_mode_names}.");
-    assert!(auto_instructions.contains(&expected_snippet));
-    assert!(auto_instructions.contains("Work until the task is complete."));
-    assert!(auto_instructions.contains("`request_user_input` tool is unavailable in Auto mode."));
-}
-
-#[test]
-fn auto_mode_instructions_can_replace_builtin_instructions() {
-    let auto_instructions = auto_preset(CollaborationModesConfig {
-        auto_mode_instructions: Some("Use my custom auto instructions.".to_string()),
-        ..Default::default()
-    })
-    .developer_instructions
-    .expect("auto preset should include instructions")
-    .expect("auto instructions should be set");
-
-    assert_eq!(auto_instructions, "Use my custom auto instructions.");
-}
-
-#[test]
-fn auto_mode_instructions_can_append_to_builtin_instructions() {
-    let auto_instructions = auto_preset(CollaborationModesConfig {
-        auto_mode_instructions: Some("Then also leave a concise final summary.".to_string()),
-        auto_mode_instructions_merge_strategy: AutoModeInstructionsMergeStrategy::Append,
-        ..Default::default()
-    })
-    .developer_instructions
-    .expect("auto preset should include instructions")
-    .expect("auto instructions should be set");
-
-    assert!(auto_instructions.contains("Work until the task is complete."));
-    assert!(auto_instructions.contains("Then also leave a concise final summary."));
 }

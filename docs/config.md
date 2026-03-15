@@ -8,9 +8,10 @@ For a full configuration reference, see [this documentation](https://developers.
 
 ## Connecting to MCP servers
 
-Codex can connect to MCP servers configured in `~/.codex/config.toml`. See the configuration reference for the latest MCP server options:
+Codex can connect to MCP servers configured in `~/.codex/config.toml`.
+See the configuration reference for the latest MCP server options:
 
-- https://developers.openai.com/codex/config-reference
+- [Configuration Reference](https://developers.openai.com/codex/config-reference)
 
 ## Apps (Connectors)
 
@@ -20,11 +21,14 @@ and are labeled as connected; others are marked as can be installed.
 
 ## Notify
 
-Codex can run a notification hook when the agent finishes a turn. See the configuration reference for the latest notification settings:
+Codex can run a notification hook when the agent finishes a turn.
+See the configuration reference for the latest notification settings:
 
-- https://developers.openai.com/codex/config-reference
+- [Configuration Reference](https://developers.openai.com/codex/config-reference)
 
-When Codex knows which client started the turn, the legacy notify JSON payload also includes a top-level `client` field. The TUI reports `codex-tui`, and the app server reports the `clientInfo.name` value from `initialize`.
+When Codex knows which client started the turn, the legacy notify JSON payload
+also includes a top-level `client` field. The TUI reports `codex-tui`, and the
+app server reports the `clientInfo.name` value from `initialize`.
 
 ## JSON Schema
 
@@ -71,24 +75,17 @@ Plan preset. The string value `none` means "no reasoning" (an explicit Plan
 override), not "inherit the global default". There is currently no separate
 config value for "follow the global default in Plan mode".
 
-## Auto mode
+## Thread title generation
 
-Auto mode is available in the current TUI session through `/auto`, `/collab`,
-and `Shift+Tab`, but it is not a persisted startup mode and is not restored
-automatically in later sessions. When Auto is selected without Full Access
-permissions, Codex shows a non-blocking warning because approval prompts or
-sandbox limits may still interrupt execution.
+Codex can auto-generate thread titles with a dedicated model and reasoning
+configuration:
 
-`auto_mode_instructions` lets you override the built-in Auto-mode developer
-instructions from config. `auto_mode_instructions_merge_strategy` controls how
-the override is applied:
-
-- `replace`: use only your configured Auto instructions.
-- `append`: keep the built-in Auto instructions and append your custom
-  instructions after them.
-
-When `auto_mode_instructions` is unset, Codex uses the built-in Auto
-instructions regardless of merge strategy.
+- `thread_title_model` overrides the model used for title generation. When
+  unset, Codex uses the active session model, then falls back to the current
+  default model preset.
+- `thread_title_reasoning_effort` overrides the reasoning effort used for title
+  generation. When unset, Codex prefers `low` when the selected model supports
+  it and otherwise falls back to that model's default reasoning effort.
 
 ## Realtime start instructions
 

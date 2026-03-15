@@ -823,8 +823,6 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
             default_mode_request_user_input: config
                 .features
                 .enabled(Feature::DefaultModeRequestUserInput),
-            auto_mode_instructions: config.auto_mode_instructions.clone(),
-            auto_mode_instructions_merge_strategy: config.auto_mode_instructions_merge_strategy,
         },
     );
     let NewThread { thread: codex, .. } = thread_manager

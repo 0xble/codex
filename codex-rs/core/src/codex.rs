@@ -1063,13 +1063,6 @@ impl SessionConfiguration {
             cwd: self.cwd.clone(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
-            auto_mode_instructions: self
-                .original_config_do_not_use
-                .auto_mode_instructions
-                .clone(),
-            auto_mode_instructions_merge_strategy: self
-                .original_config_do_not_use
-                .auto_mode_instructions_merge_strategy,
             personality: self.personality,
             session_source: self.session_source.clone(),
         }

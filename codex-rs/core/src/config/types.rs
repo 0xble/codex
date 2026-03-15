@@ -47,14 +47,6 @@ pub struct WindowsToml {
     pub sandbox_private_desktop: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AutoModeInstructionsMergeStrategy {
-    #[default]
-    Replace,
-    Append,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpServerDisabledReason {
     Unknown,

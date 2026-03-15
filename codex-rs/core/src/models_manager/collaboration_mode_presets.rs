@@ -1,4 +1,3 @@
-use crate::config::types::AutoModeInstructionsMergeStrategy;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::TUI_VISIBLE_COLLABORATION_MODES;
@@ -7,7 +6,6 @@ use codex_protocol::openai_models::ReasoningEffort;
 const COLLABORATION_MODE_PLAN: &str = include_str!("../../templates/collaboration_mode/plan.md");
 const COLLABORATION_MODE_DEFAULT: &str =
     include_str!("../../templates/collaboration_mode/default.md");
-const COLLABORATION_MODE_AUTO: &str = include_str!("../../templates/collaboration_mode/auto.md");
 const KNOWN_MODE_NAMES_PLACEHOLDER: &str = "{{KNOWN_MODE_NAMES}}";
 const REQUEST_USER_INPUT_AVAILABILITY_PLACEHOLDER: &str = "{{REQUEST_USER_INPUT_AVAILABILITY}}";
 const ASKING_QUESTIONS_GUIDANCE_PLACEHOLDER: &str = "{{ASKING_QUESTIONS_GUIDANCE}}";
@@ -17,24 +15,16 @@ const ASKING_QUESTIONS_GUIDANCE_PLACEHOLDER: &str = "{{ASKING_QUESTIONS_GUIDANCE
 /// Keep mode-related flags here so new collaboration-mode capabilities can be
 /// added without large cross-cutting diffs to constructor and call-site
 /// signatures.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CollaborationModesConfig {
     /// Enables `request_user_input` availability in Default mode.
     pub default_mode_request_user_input: bool,
-    /// Optional Auto-mode instruction override for the built-in Auto preset.
-    pub auto_mode_instructions: Option<String>,
-    /// Controls how custom Auto-mode instructions interact with the built-in preset.
-    pub auto_mode_instructions_merge_strategy: AutoModeInstructionsMergeStrategy,
 }
 
 pub(crate) fn builtin_collaboration_mode_presets(
     collaboration_modes_config: CollaborationModesConfig,
 ) -> Vec<CollaborationModeMask> {
-    vec![
-        default_preset(collaboration_modes_config.clone()),
-        plan_preset(),
-        auto_preset(collaboration_modes_config),
-    ]
+    vec![plan_preset(), default_preset(collaboration_modes_config)]
 }
 
 fn plan_preset() -> CollaborationModeMask {
@@ -57,16 +47,6 @@ fn default_preset(collaboration_modes_config: CollaborationModesConfig) -> Colla
     }
 }
 
-fn auto_preset(collaboration_modes_config: CollaborationModesConfig) -> CollaborationModeMask {
-    CollaborationModeMask {
-        name: ModeKind::Auto.display_name().to_string(),
-        mode: Some(ModeKind::Auto),
-        model: None,
-        reasoning_effort: None,
-        developer_instructions: Some(Some(auto_mode_instructions(collaboration_modes_config))),
-    }
-}
-
 fn default_mode_instructions(collaboration_modes_config: CollaborationModesConfig) -> String {
     let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
     let request_user_input_availability = request_user_input_availability_message(
@@ -86,25 +66,6 @@ fn default_mode_instructions(collaboration_modes_config: CollaborationModesConfi
             ASKING_QUESTIONS_GUIDANCE_PLACEHOLDER,
             &asking_questions_guidance,
         )
-}
-
-fn auto_mode_instructions(collaboration_modes_config: CollaborationModesConfig) -> String {
-    let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
-    let builtin = COLLABORATION_MODE_AUTO.replace(KNOWN_MODE_NAMES_PLACEHOLDER, &known_mode_names);
-    let Some(custom) = collaboration_modes_config.auto_mode_instructions else {
-        return builtin;
-    };
-
-    match collaboration_modes_config.auto_mode_instructions_merge_strategy {
-        AutoModeInstructionsMergeStrategy::Replace => custom,
-        AutoModeInstructionsMergeStrategy::Append => {
-            if custom.is_empty() {
-                builtin
-            } else {
-                format!("{builtin}\n\n{custom}")
-            }
-        }
-    }
 }
 
 fn format_mode_names(modes: &[ModeKind]) -> String {

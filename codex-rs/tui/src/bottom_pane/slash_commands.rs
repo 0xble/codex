@@ -26,10 +26,7 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
         .filter(|(_, cmd)| {
             flags.collaboration_modes_enabled
-                || !matches!(
-                    *cmd,
-                    SlashCommand::Collab | SlashCommand::Plan | SlashCommand::Auto
-                )
+                || !matches!(*cmd, SlashCommand::Collab | SlashCommand::Plan)
         })
         .filter(|(_, cmd)| flags.connectors_enabled || *cmd != SlashCommand::Apps)
         .filter(|(_, cmd)| flags.fast_command_enabled || *cmd != SlashCommand::Fast)
