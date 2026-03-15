@@ -139,6 +139,7 @@ mod skills_helpers;
 mod slash_command;
 mod status;
 mod status_indicator_widget;
+mod status_line_account;
 mod streaming;
 mod style;
 mod terminal_palette;

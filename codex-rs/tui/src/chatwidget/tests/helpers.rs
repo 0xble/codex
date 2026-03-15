@@ -108,6 +108,14 @@ pub(super) fn snapshot(percent: f64) -> RateLimitSnapshot {
     }
 }
 
+pub(super) fn create_test_instance_home(root: &std::path::Path, slug: &str) -> PathBuf {
+    let instance_home = root.join("instances").join(slug);
+    std::fs::create_dir_all(&instance_home).expect("create instance home");
+    std::fs::write(root.join("config.toml"), "").expect("write root config");
+    std::fs::write(instance_home.join("config.toml"), "").expect("write instance config");
+    instance_home
+}
+
 pub(super) fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
     let model_info = codex_core::test_support::construct_model_info_offline(model, config);
     SessionTelemetry::new(

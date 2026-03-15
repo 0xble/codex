@@ -10,6 +10,7 @@
 //! # Available Status Line Items
 //!
 //! - Model information (name, reasoning level)
+//! - Account information (active instance slug)
 //! - Directory paths (current dir, project root)
 //! - Git information (branch name)
 //! - Context usage (remaining %, used %, window size)
@@ -53,6 +54,9 @@ pub(crate) enum StatusLineItem {
 
     /// Model name with reasoning level suffix.
     ModelWithReasoning,
+
+    /// Current account slug derived from the active Codex home instance path.
+    Account,
 
     /// Current working directory path.
     CurrentDir,
@@ -103,6 +107,9 @@ impl StatusLineItem {
         match self {
             StatusLineItem::ModelName => "Current model name",
             StatusLineItem::ModelWithReasoning => "Current model name with reasoning level",
+            StatusLineItem::Account => {
+                "Active account slug from current Codex home (omitted outside instance homes)"
+            }
             StatusLineItem::CurrentDir => "Current working directory",
             StatusLineItem::ProjectRoot => "Project root directory (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",

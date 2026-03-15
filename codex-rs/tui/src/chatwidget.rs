@@ -65,6 +65,7 @@ use crate::status::rate_limit_snapshot_display_for_limit;
 use crate::terminal_title::SetTerminalTitleResult;
 use crate::terminal_title::clear_terminal_title;
 use crate::terminal_title::set_terminal_title;
+use crate::status_line_account;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::AppSummary;
@@ -7509,6 +7510,14 @@ impl ChatWidget {
         })
     }
 
+    fn status_line_account_label_for_codex_home(codex_home: Option<&Path>) -> Option<String> {
+        status_line_account::label_for_codex_home(codex_home)
+    }
+
+    fn status_line_account_label(&self) -> Option<String> {
+        Self::status_line_account_label_for_codex_home(Some(self.config.codex_home.as_path()))
+    }
+
     /// Resets git-branch cache state when the status-line cwd changes.
     ///
     /// The branch cache is keyed by cwd because branch lookup is performed relative to that path.
@@ -7563,6 +7572,7 @@ impl ChatWidget {
                 };
                 Some(format!("{} {label}{fast_label}", self.model_display_name()))
             }
+            StatusLineItem::Account => self.status_line_account_label(),
             StatusLineItem::CurrentDir => {
                 Some(format_directory_display(
                     self.status_line_cwd(),

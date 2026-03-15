@@ -988,6 +988,34 @@ async fn status_line_fast_mode_renders_on_and_off() {
     assert_eq!(status_line_text(&chat), Some("Fast on".to_string()));
 }
 
+#[test]
+fn status_line_account_uses_instance_slug() {
+    let root = tempdir().expect("create temp root");
+    let instance_home = create_test_instance_home(root.path(), "ebjd7");
+    let label = ChatWidget::status_line_account_label_for_codex_home(Some(&instance_home));
+
+    assert_eq!(label, Some("ebjd7".to_string()));
+}
+
+#[test]
+fn status_line_account_omits_root_codex_home() {
+    let root = tempdir().expect("create temp root");
+    std::fs::write(root.path().join("config.toml"), "").expect("write root config");
+    let label = ChatWidget::status_line_account_label_for_codex_home(Some(root.path()));
+
+    assert_eq!(label, None);
+}
+
+#[tokio::test]
+async fn status_line_account_uses_active_config_codex_home() {
+    let root = tempdir().expect("create temp root");
+    let instance_home = create_test_instance_home(root.path(), "ebjd7");
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.codex_home = instance_home;
+
+    assert_eq!(chat.status_line_account_label(), Some("ebjd7".to_string()));
+}
+
 #[tokio::test]
 async fn status_line_fast_mode_footer_snapshot() {
     use ratatui::Terminal;
