@@ -208,13 +208,14 @@ async fn find_thread_title_state_by_id_tracks_manual_and_auto_titles() -> std::i
             latest_title: Some("Custom Title".to_string()),
             manual_title: Some("Custom Title".to_string()),
             auto_title: Some("Improve Codex Titles".to_string()),
+            unknown_title: None,
         }
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn find_thread_title_state_defaults_legacy_entries_to_auto() -> std::io::Result<()> {
+async fn find_thread_title_state_tracks_legacy_entries_as_unknown() -> std::io::Result<()> {
     let temp = TempDir::new()?;
     let path = session_index_path(temp.path());
     let id = ThreadId::new();
@@ -231,7 +232,8 @@ async fn find_thread_title_state_defaults_legacy_entries_to_auto() -> std::io::R
         ThreadTitleState {
             latest_title: Some("Legacy Title".to_string()),
             manual_title: None,
-            auto_title: Some("Legacy Title".to_string()),
+            auto_title: None,
+            unknown_title: Some("Legacy Title".to_string()),
         }
     );
     Ok(())

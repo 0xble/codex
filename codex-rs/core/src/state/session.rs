@@ -166,9 +166,7 @@ impl SessionState {
     }
 
     pub(crate) fn start_auto_thread_name_generation(&mut self) -> bool {
-        if self.auto_thread_name_generation_in_flight
-            || self.session_configuration.has_thread_name()
-        {
+        if self.auto_thread_name_generation_in_flight {
             return false;
         }
         self.auto_thread_name_generation_in_flight = true;

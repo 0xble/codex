@@ -31,9 +31,28 @@ Good examples:
 Bad (too vague): {"title": "Code changes"}
 Bad (too long): {"title": "Investigate and fix the issue where the login button does not respond on mobile devices"}
 Bad (wrong case): {"title": "Fix Login Button On Mobile"}"#;
+const CLAUDE_RETITLE_PROMPT: &str = r#"Given the current title for a coding session and the latest meaningful user request, decide whether the title should change.
+Return JSON with exactly 2 fields:
+{"should_update": false, "title": "Current title"}
+or
+{"should_update": true, "title": "New sentence-case title"}
+
+Rules:
+- Update only for clear topic changes.
+- Do not update for wording tweaks, follow-up clarifications, or temporary subtasks.
+- Do not update when the current title still accurately describes the session.
+- If should_update is false, return the unchanged current title.
+- If should_update is true, return a concise sentence-case title in 3-7 words.
+"#;
 
 #[derive(Debug, Deserialize)]
 struct GeneratedTitleResponse {
+    title: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RetitleDecisionResponse {
+    should_update: bool,
     title: String,
 }
 
@@ -87,6 +106,66 @@ pub(crate) async fn generate_thread_title(
     Some(title)
 }
 
+pub(crate) async fn maybe_retitle_thread(
+    services: &SessionServices,
+    config: &Config,
+    cwd: &Path,
+    current_title: &str,
+    prompt_text: &str,
+) -> Option<String> {
+    let current_title = sanitize_generated_title(current_title)?;
+    let prompt_text = compact_title_prompt(prompt_text);
+    if prompt_text.is_empty()
+        || is_low_signal_prompt(&prompt_text)
+        || !is_informative_prompt(&prompt_text)
+    {
+        return None;
+    }
+
+    let models = services
+        .models_manager
+        .list_models(RefreshStrategy::OnlineIfUncached)
+        .await;
+    let model = resolve_title_model(config, models.as_slice())?;
+    let model_info = services
+        .models_manager
+        .get_model_info(model.as_str(), config)
+        .await;
+    let reasoning_effort = resolve_title_reasoning_effort(config, &model_info);
+
+    let prompt = build_retitle_prompt(format!(
+        "Working directory: {}\nCurrent session title: {}\nLatest user request: {}",
+        cwd.display(),
+        current_title,
+        prompt_text
+    ));
+    let mut client_session = services.model_client.new_session();
+    let result = collect_model_text(
+        &mut client_session,
+        &prompt,
+        &model_info,
+        reasoning_effort,
+        &services.session_telemetry,
+    )
+    .await?;
+
+    let decision = parse_retitle_decision(&result, &current_title)?;
+    if !decision.should_update {
+        return None;
+    }
+
+    let title = sanitize_generated_title(&decision.title)?;
+    if !title_fits_constraints(&title) {
+        warn!("thread retitle generator produced an invalid title: {title:?}");
+        return None;
+    }
+    if same_title_identity(&title, &current_title) {
+        return None;
+    }
+
+    Some(title)
+}
+
 pub(crate) fn prompt_text_from_user_input(
     input: &[codex_protocol::user_input::UserInput],
 ) -> Option<String> {
@@ -105,6 +184,22 @@ pub(crate) fn prompt_text_from_user_input(
 }
 
 fn build_generation_prompt(context: String) -> Prompt {
+    build_title_prompt(
+        context,
+        title_generation_instructions(),
+        title_output_schema(),
+    )
+}
+
+fn build_retitle_prompt(context: String) -> Prompt {
+    build_title_prompt(context, retitle_instructions(), retitle_output_schema())
+}
+
+fn build_title_prompt(
+    context: String,
+    instructions: String,
+    output_schema: serde_json::Value,
+) -> Prompt {
     Prompt {
         input: vec![ResponseItem::Message {
             id: None,
@@ -115,11 +210,9 @@ fn build_generation_prompt(context: String) -> Prompt {
         }],
         tools: Vec::new(),
         parallel_tool_calls: false,
-        base_instructions: BaseInstructions {
-            text: title_generation_instructions(),
-        },
+        base_instructions: BaseInstructions { text: instructions },
         personality: None,
-        output_schema: Some(title_output_schema()),
+        output_schema: Some(output_schema),
     }
 }
 
@@ -176,12 +269,32 @@ fn title_generation_instructions() -> String {
     CLAUDE_TITLE_PROMPT.to_string()
 }
 
+fn retitle_instructions() -> String {
+    CLAUDE_RETITLE_PROMPT.to_string()
+}
+
 fn title_output_schema() -> serde_json::Value {
     json!({
         "type": "object",
         "additionalProperties": false,
         "required": ["title"],
         "properties": {
+            "title": {
+                "type": "string"
+            }
+        }
+    })
+}
+
+fn retitle_output_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["should_update", "title"],
+        "properties": {
+            "should_update": {
+                "type": "boolean"
+            },
             "title": {
                 "type": "string"
             }
@@ -251,6 +364,27 @@ fn parse_title_response(raw: &str) -> Option<String> {
         .map(|response| response.title)
 }
 
+fn parse_retitle_decision(raw: &str, current_title: &str) -> Option<RetitleDecisionResponse> {
+    let raw = raw.trim();
+    parse_retitle_response(raw)
+        .or_else(|| {
+            let start = raw.find('{')?;
+            let end = raw.rfind('}')?;
+            parse_retitle_response(&raw[start..=end])
+        })
+        .or_else(|| {
+            let title = parse_generated_title(raw)?;
+            Some(RetitleDecisionResponse {
+                should_update: !same_title_identity(&title, current_title),
+                title,
+            })
+        })
+}
+
+fn parse_retitle_response(raw: &str) -> Option<RetitleDecisionResponse> {
+    serde_json::from_str::<RetitleDecisionResponse>(raw).ok()
+}
+
 fn sanitize_generated_title(title: &str) -> Option<String> {
     let mut title = title.trim();
     for (start, end) in [("\"", "\""), ("'", "'"), ("`", "`")] {
@@ -265,6 +399,10 @@ fn sanitize_generated_title(title: &str) -> Option<String> {
 
 fn collapse_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn same_title_identity(left: &str, right: &str) -> bool {
+    collapse_whitespace(left).eq_ignore_ascii_case(collapse_whitespace(right).as_str())
 }
 
 fn compact_title_prompt(prompt: &str) -> String {
@@ -551,6 +689,34 @@ Bad (too vague): {"title": "Code changes"}
 Bad (too long): {"title": "Investigate and fix the issue where the login button does not respond on mobile devices"}
 Bad (wrong case): {"title": "Fix Login Button On Mobile"}"#
         );
+    }
+
+    #[test]
+    fn parse_retitle_decision_extracts_json_payload() {
+        let decision = parse_retitle_decision(
+            "{\"should_update\":true,\"title\":\"Fix login button on mobile\"}",
+            "Current title",
+        )
+        .expect("expected decision");
+        assert!(decision.should_update);
+        assert_eq!(decision.title, "Fix login button on mobile");
+    }
+
+    #[test]
+    fn parse_retitle_decision_falls_back_to_same_title_without_update() {
+        let decision =
+            parse_retitle_decision("Fix login button on mobile", "Fix login button on mobile")
+                .expect("expected decision");
+        assert!(!decision.should_update);
+        assert_eq!(decision.title, "Fix login button on mobile");
+    }
+
+    #[test]
+    fn same_title_identity_ignores_case_and_spacing() {
+        assert!(same_title_identity(
+            "Fix login button on mobile",
+            "  fix   login button on mobile  "
+        ));
     }
 
     #[test]

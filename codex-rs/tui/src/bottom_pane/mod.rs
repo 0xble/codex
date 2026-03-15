@@ -123,17 +123,6 @@ pub(crate) enum TerminalTitleFocus {
     McpElicitation,
 }
 
-impl TerminalTitleFocus {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Approval => "Approval",
-            Self::Permissions => "Permissions",
-            Self::RequestUserInput => "Input",
-            Self::McpElicitation => "MCP Elicitation",
-        }
-    }
-}
-
 /// How long the "press again to quit" hint stays visible.
 ///
 /// This is shared between:

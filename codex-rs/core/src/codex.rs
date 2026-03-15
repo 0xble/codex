@@ -1126,10 +1126,6 @@ impl SessionConfiguration {
         &self.codex_home
     }
 
-    pub(crate) fn has_thread_name(&self) -> bool {
-        self.thread_name.is_some()
-    }
-
     fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
         ThreadConfigSnapshot {
             model: self.collaboration_mode.model().to_string(),
@@ -3945,16 +3941,48 @@ impl Session {
         let config = Arc::clone(&turn_context.config);
         let cwd = turn_context.cwd.clone();
         tokio::spawn(async move {
-            let generated = crate::thread_title::generate_thread_title(
-                &sess.services,
-                config.as_ref(),
-                cwd.as_path(),
-                &prompt_text,
+            let codex_home = sess.codex_home().await;
+            let title_state = match session_index::find_thread_title_state_by_id(
+                &codex_home,
+                &sess.conversation_id,
             )
-            .await;
+            .await
+            {
+                Ok(state) => state,
+                Err(err) => {
+                    warn!("Failed to read persisted thread title state: {err}");
+                    crate::rollout::ThreadTitleState::default()
+                }
+            };
+
+            let generated =
+                if title_state.manual_title.is_some() || title_state.unknown_title.is_some() {
+                    None
+                } else if let Some(current_title) = title_state
+                    .auto_title
+                    .as_deref()
+                    .or(title_state.latest_title.as_deref())
+                {
+                    crate::thread_title::maybe_retitle_thread(
+                        &sess.services,
+                        config.as_ref(),
+                        cwd.as_path(),
+                        current_title,
+                        &prompt_text,
+                    )
+                    .await
+                } else {
+                    crate::thread_title::generate_thread_title(
+                        &sess.services,
+                        config.as_ref(),
+                        cwd.as_path(),
+                        &prompt_text,
+                    )
+                    .await
+                };
 
             if let Some(name) = generated {
-                handlers::set_thread_name_if_absent(&sess, name).await;
+                handlers::set_generated_thread_name(&sess, name).await;
             }
 
             let mut state = sess.state.lock().await;
@@ -5375,14 +5403,15 @@ mod handlers {
         .await;
     }
 
-    pub async fn set_thread_name_if_absent(sess: &Arc<Session>, name: String) {
+    pub async fn set_generated_thread_name(sess: &Arc<Session>, name: String) {
         let Some(name) = crate::util::normalize_thread_name(&name) else {
             return;
         };
-        if persist_thread_name(sess, &name, true, crate::rollout::ThreadNameSource::Auto)
-            .await
-            .is_err()
-        {
+
+        let Ok(persisted) = persist_generated_thread_name(sess, &name).await else {
+            return;
+        };
+        if !persisted {
             return;
         }
 
@@ -5435,6 +5464,47 @@ mod handlers {
         }
         state.session_configuration.thread_name = Some(name.to_string());
         Ok(())
+    }
+
+    async fn persist_generated_thread_name(
+        sess: &Arc<Session>,
+        name: &str,
+    ) -> Result<bool, String> {
+        let _thread_name_guard = sess.thread_name_lock.lock().await;
+
+        let persistence_enabled = {
+            let rollout = sess.services.rollout.lock().await;
+            rollout.is_some()
+        };
+        if !persistence_enabled {
+            return Err("Session persistence is disabled; cannot rename thread.".to_string());
+        }
+
+        let codex_home = sess.codex_home().await;
+        let title_state =
+            session_index::find_thread_title_state_by_id(&codex_home, &sess.conversation_id)
+                .await
+                .map_err(|err| format!("Failed to read thread title state: {err}"))?;
+        if title_state.manual_title.is_some()
+            || title_state.unknown_title.is_some()
+            || title_state.latest_title.as_deref() == Some(name)
+            || title_state.auto_title.as_deref() == Some(name)
+        {
+            return Ok(false);
+        }
+
+        session_index::append_thread_name_with_source(
+            &codex_home,
+            sess.conversation_id,
+            name,
+            crate::rollout::ThreadNameSource::Auto,
+        )
+        .await
+        .map_err(|err| format!("Failed to set thread name: {err}"))?;
+
+        let mut state = sess.state.lock().await;
+        state.session_configuration.thread_name = Some(name.to_string());
+        Ok(true)
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {

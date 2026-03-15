@@ -38,12 +38,25 @@ pub struct ThreadTitleState {
     pub latest_title: Option<String>,
     pub manual_title: Option<String>,
     pub auto_title: Option<String>,
+    pub unknown_title: Option<String>,
 }
 
 impl ThreadTitleState {
     pub fn is_empty(&self) -> bool {
-        self.latest_title.is_none() && self.manual_title.is_none() && self.auto_title.is_none()
+        self.latest_title.is_none()
+            && self.manual_title.is_none()
+            && self.auto_title.is_none()
+            && self.unknown_title.is_none()
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct ReadSessionIndexEntry {
+    id: ThreadId,
+    thread_name: String,
+    #[allow(dead_code)]
+    updated_at: String,
+    source: Option<ThreadNameSource>,
 }
 
 /// Append a thread name update to the session index.
@@ -133,7 +146,7 @@ pub async fn find_thread_title_state_by_id(
         if trimmed.is_empty() {
             continue;
         }
-        let Ok(entry) = serde_json::from_str::<SessionIndexEntry>(trimmed) else {
+        let Ok(entry) = serde_json::from_str::<ReadSessionIndexEntry>(trimmed) else {
             continue;
         };
         if entry.id != *thread_id {
@@ -146,8 +159,15 @@ pub async fn find_thread_title_state_by_id(
         let title = title.to_string();
         state.latest_title = Some(title.clone());
         match entry.source {
-            ThreadNameSource::Auto => state.auto_title = Some(title),
-            ThreadNameSource::Manual => state.manual_title = Some(title),
+            Some(ThreadNameSource::Auto) => {
+                state.auto_title = Some(title);
+                state.unknown_title = None;
+            }
+            Some(ThreadNameSource::Manual) => {
+                state.manual_title = Some(title);
+                state.unknown_title = None;
+            }
+            None => state.unknown_title = Some(title),
         }
     }
 

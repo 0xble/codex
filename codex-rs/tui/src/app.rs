@@ -171,7 +171,6 @@ use self::pending_interactive_replay::PendingInteractiveReplayState;
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 const TITLE_SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const REQUEST_INPUT_TITLE_FRAMES: [&str; 2] = ["?", "."];
 const TURN_COMPLETE_TITLE_PREFIX: &str = "✓";
 const DEFAULT_TITLE_IDENTITY: &str = "Codex";
 
@@ -966,10 +965,6 @@ fn normalize_persisted_title_segment(segment: Option<String>) -> Option<String> 
     normalize_title_segment(segment).filter(|segment| !is_generic_title_placeholder(segment))
 }
 
-fn normalize_status_title_segment(segment: Option<String>) -> Option<String> {
-    normalize_title_segment(segment).filter(|segment| !is_generic_status_placeholder(segment))
-}
-
 fn is_generic_title_placeholder(segment: &str) -> bool {
     matches!(
         segment.trim().to_ascii_lowercase().as_str(),
@@ -982,30 +977,6 @@ fn is_generic_title_placeholder(segment: &str) -> bool {
     )
 }
 
-fn is_generic_status_placeholder(segment: &str) -> bool {
-    matches!(
-        segment.trim().to_ascii_lowercase().as_str(),
-        "working" | "working in background" | "waiting for background terminal"
-    )
-}
-
-fn compose_running_title(manual_title: Option<&str>, live_title: String) -> String {
-    match manual_title {
-        Some(manual_title) if !manual_title.eq_ignore_ascii_case(live_title.as_str()) => {
-            format!("{manual_title} | {live_title}")
-        }
-        _ => live_title,
-    }
-}
-
-fn request_input_title_indicator(show_spinner: bool, tick: u128) -> &'static str {
-    if show_spinner {
-        REQUEST_INPUT_TITLE_FRAMES[tick as usize % REQUEST_INPUT_TITLE_FRAMES.len()]
-    } else {
-        "?"
-    }
-}
-
 fn complete_title_indicator(identity: String) -> String {
     format!("{TURN_COMPLETE_TITLE_PREFIX} {identity}")
 }
@@ -1014,8 +985,6 @@ fn compute_title_context(
     manual_title: Option<String>,
     canonical_title: Option<String>,
     latest_title: Option<String>,
-    work_hint: Option<String>,
-    status_header: Option<String>,
     focus: Option<TerminalTitleFocus>,
     task_running: bool,
     turn_complete: bool,
@@ -1025,64 +994,32 @@ fn compute_title_context(
     let manual_title = normalize_title_segment(manual_title);
     let canonical_title = normalize_persisted_title_segment(canonical_title);
     let latest_title = normalize_persisted_title_segment(latest_title);
-    let work_hint = normalize_persisted_title_segment(work_hint);
-    let status = normalize_status_title_segment(status_header);
-    let idle_identity = manual_title
+    let identity = manual_title
         .clone()
         .or_else(|| latest_title.clone())
         .or_else(|| canonical_title.clone())
-        .or_else(|| work_hint.clone());
-    if task_running && focus == Some(TerminalTitleFocus::RequestUserInput) {
-        let live_title = work_hint
-            .clone()
-            .or_else(|| canonical_title.clone())
-            .or_else(|| latest_title.clone())
-            .or_else(|| status.clone())
-            .unwrap_or_else(|| TerminalTitleFocus::RequestUserInput.label().to_string());
-        return Some(compose_running_title(
-            manual_title.as_deref(),
-            format!(
-                "{} {live_title}",
-                request_input_title_indicator(show_spinner, tick)
-            ),
-        ));
-    }
+        .unwrap_or_else(|| DEFAULT_TITLE_IDENTITY.to_string());
+
     if !task_running {
         return if turn_complete {
-            let completed_identity = work_hint
-                .clone()
-                .or_else(|| canonical_title.clone())
-                .or_else(|| latest_title.clone())
-                .or_else(|| idle_identity.clone())
-                .unwrap_or_else(|| DEFAULT_TITLE_IDENTITY.to_string());
-            Some(compose_running_title(
-                manual_title.as_deref(),
-                complete_title_indicator(completed_identity),
-            ))
+            Some(complete_title_indicator(identity))
         } else {
-            idle_identity
+            Some(identity)
         };
     }
 
-    let running_identity = work_hint
-        .clone()
-        .or_else(|| canonical_title.clone())
-        .or_else(|| latest_title.clone());
-
-    let title = focus
-        .map(|focus| focus.label().to_string())
-        .or(running_identity)
-        .or(status)
-        .unwrap_or_else(|| DEFAULT_TITLE_IDENTITY.to_string());
+    if focus == Some(TerminalTitleFocus::RequestUserInput) {
+        return Some(identity);
+    }
 
     let title = if show_spinner {
         let frame = TITLE_SPINNER_FRAMES[tick as usize % TITLE_SPINNER_FRAMES.len()];
-        format!("{frame} {title}")
+        format!("{frame} {identity}")
     } else {
-        title
+        identity
     };
 
-    Some(compose_running_title(manual_title.as_deref(), title))
+    Some(title)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1122,8 +1059,6 @@ async fn update_terminal_title(tui: &mut tui::Tui, app: &mut App) -> Result<()> 
         persisted_titles.manual_title,
         persisted_titles.canonical_title,
         persisted_titles.latest_title,
-        app.chat_widget.terminal_title_work_hint(),
-        app.chat_widget.terminal_title_status(),
         app.chat_widget.terminal_title_focus(),
         task_running,
         app.chat_widget.terminal_title_turn_complete(),
@@ -6678,78 +6613,70 @@ mod tests {
     }
 
     #[test]
-    fn title_context_prefers_focus_while_running() {
+    fn title_context_keeps_spinner_for_non_request_focus_while_running() {
         assert_eq!(
             compute_title_context(
                 Some("thread name".to_string()),
                 Some("persisted title".to_string()),
                 Some("thread name".to_string()),
-                Some("draft focus".to_string()),
-                Some("Reviewing".to_string()),
                 Some(TerminalTitleFocus::Permissions),
                 true,
                 false,
                 true,
                 0,
             ),
-            Some("thread name | ⠋ Permissions".to_string())
+            Some("⠋ thread name".to_string())
         );
     }
 
     #[test]
-    fn title_context_uses_question_mark_for_request_user_input() {
+    fn title_context_uses_bare_identity_for_request_user_input() {
         assert_eq!(
             compute_title_context(
                 Some("thread name".to_string()),
                 Some("persisted title".to_string()),
                 Some("thread name".to_string()),
-                Some("draft focus".to_string()),
-                Some("Need input".to_string()),
                 Some(TerminalTitleFocus::RequestUserInput),
                 true,
                 false,
                 true,
                 0,
             ),
-            Some("thread name | ? draft focus".to_string())
+            Some("thread name".to_string())
         );
     }
 
     #[test]
-    fn title_context_uses_static_question_indicator_when_animations_are_disabled() {
+    fn title_context_uses_bare_identity_for_request_user_input_without_animation() {
         assert_eq!(
             compute_title_context(
                 None,
                 Some("Improve Codex Titles".to_string()),
                 Some("Improve Codex Titles".to_string()),
-                None,
-                Some("Need input".to_string()),
                 Some(TerminalTitleFocus::RequestUserInput),
                 true,
                 false,
                 false,
                 0,
             ),
-            Some("? Improve Codex Titles".to_string())
+            Some("Improve Codex Titles".to_string())
         );
     }
 
     #[test]
-    fn title_context_prefers_work_identity_over_status_when_focus_is_absent() {
+    fn title_context_prefers_ai_identity_while_running() {
         assert_eq!(
             compute_title_context(
                 None,
                 Some("persisted title".to_string()),
                 Some("persisted title".to_string()),
-                Some("draft focus".to_string()),
-                Some("Reviewing".to_string()),
                 None,
                 true,
                 false,
                 true,
                 1,
             ),
-            Some("⠙ draft focus".to_string())
+            Some("⠙ persisted title".to_string())
         );
     }
 
@@ -6760,8 +6687,6 @@ mod tests {
                 Some("named thread".to_string()),
                 Some("persisted title".to_string()),
                 Some("named thread".to_string()),
-                Some("draft focus".to_string()),
-                Some("Working".to_string()),
                 Some(TerminalTitleFocus::Approval),
                 false,
                 false,
@@ -6775,8 +6700,6 @@ mod tests {
                 None,
                 None,
                 Some("persisted title".to_string()),
-                Some("draft focus".to_string()),
-                None,
                 None,
                 false,
                 false,
@@ -6788,33 +6711,29 @@ mod tests {
     }
 
     #[test]
-    fn title_context_prefers_work_hint_over_thread_name_while_running() {
+    fn title_context_prefers_manual_title_while_running() {
         assert_eq!(
             compute_title_context(
                 Some("named thread".to_string()),
                 None,
                 Some("named thread".to_string()),
-                Some("draft focus".to_string()),
-                Some("Working".to_string()),
                 None,
                 true,
                 false,
                 false,
                 0,
             ),
-            Some("named thread | draft focus".to_string())
+            Some("named thread".to_string())
         );
     }
 
     #[test]
-    fn title_context_falls_back_to_canonical_title_when_running_without_work_hint() {
+    fn title_context_falls_back_to_canonical_title_when_running_without_latest_title() {
         assert_eq!(
             compute_title_context(
                 None,
                 Some("Improve Codex Titles".to_string()),
-                Some("Improve Codex Titles".to_string()),
                 None,
-                Some("Working".to_string()),
                 None,
                 true,
                 false,
@@ -6831,9 +6750,7 @@ mod tests {
             compute_title_context(
                 None,
                 Some("Fix login button on mobile".to_string()),
-                Some("Fix login button on mobile".to_string()),
                 None,
-                Some("Working".to_string()),
                 None,
                 true,
                 false,
@@ -6847,27 +6764,42 @@ mod tests {
     #[test]
     fn title_context_falls_back_to_codex_when_running_without_any_context() {
         assert_eq!(
-            compute_title_context(None, None, None, None, None, None, true, false, true, 2),
+            compute_title_context(None, None, None, None, true, false, true, 2),
             Some("⠹ Codex".to_string())
         );
     }
 
     #[test]
-    fn title_context_uses_custom_title_prefix_while_running() {
+    fn title_context_prefers_latest_title_over_stale_canonical_title() {
         assert_eq!(
             compute_title_context(
-                Some("Custom Title".to_string()),
+                None,
                 Some("Improve Codex Titles".to_string()),
-                Some("Custom Title".to_string()),
-                Some("Implement first-turn title update".to_string()),
-                Some("Working".to_string()),
+                Some("Custom Legacy Title".to_string()),
                 None,
                 true,
                 false,
                 false,
                 0,
             ),
-            Some("Custom Title | Implement first-turn title update".to_string())
+            Some("Custom Legacy Title".to_string())
+        );
+    }
+
+    #[test]
+    fn title_context_uses_manual_title_while_running() {
+        assert_eq!(
+            compute_title_context(
+                Some("Custom Title".to_string()),
+                Some("Improve Codex Titles".to_string()),
+                Some("Custom Title".to_string()),
+                None,
+                true,
+                false,
+                false,
+                0,
+            ),
+            Some("Custom Title".to_string())
         );
     }
 
@@ -6878,8 +6810,6 @@ mod tests {
                 None,
                 Some("Waiting for background terminal".to_string()),
                 Some("Waiting for background terminal".to_string()),
-                None,
-                Some("Working in background".to_string()),
                 None,
                 true,
                 false,
@@ -6897,23 +6827,19 @@ mod tests {
                 Some("Custom Title".to_string()),
                 Some("Improve Codex Titles".to_string()),
                 Some("Custom Title".to_string()),
-                Some("Implement first-turn title update".to_string()),
-                None,
                 None,
                 false,
                 true,
                 false,
                 0,
             ),
-            Some("Custom Title | ✓ Implement first-turn title update".to_string())
+            Some("✓ Custom Title".to_string())
         );
         assert_eq!(
             compute_title_context(
                 None,
                 Some("Improve Codex Titles".to_string()),
                 Some("Improve Codex Titles".to_string()),
-                None,
-                None,
                 None,
                 false,
                 true,
