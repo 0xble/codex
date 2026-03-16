@@ -255,6 +255,9 @@ pub struct ReviewArgs {
 
     /// Restrict review findings to the given repo-relative paths.
     ///
+    /// If no explicit review target is provided, path-scoped review defaults
+    /// to the current uncommitted changes.
+    ///
     /// You can either repeat the flag (`--paths a --paths b`) or pass
     /// multiple paths after a single flag (`--paths a b`).
     ///
@@ -270,6 +273,9 @@ pub struct ReviewArgs {
     pub paths: Vec<String>,
 
     /// Read review pathspecs from a file, one path per line.
+    ///
+    /// If no explicit review target is provided, path-scoped review defaults
+    /// to the current uncommitted changes.
     #[arg(
         long = "pathspec-from-file",
         value_name = "FILE",

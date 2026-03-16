@@ -1683,9 +1683,11 @@ fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
         ReviewTarget::Custom {
             instructions: prompt,
         }
+    } else if !pathspecs.is_empty() {
+        ReviewTarget::UncommittedChanges
     } else {
         anyhow::bail!(
-            "Specify --uncommitted, --staged, --base, --commit, or provide custom review instructions"
+            "Specify --uncommitted, --staged, --base, --commit, or provide custom review instructions. Path-scoped review defaults to uncommitted review when --paths or --pathspec-from-file is provided"
         );
     };
 
@@ -1909,6 +1911,31 @@ mod tests {
     }
 
     #[test]
+    fn infers_uncommitted_review_request_from_paths() {
+        let args = ReviewArgs {
+            uncommitted: false,
+            staged: false,
+            base: None,
+            commit: None,
+            commit_title: None,
+            paths: vec!["src/lib.rs".to_string(), "src/main.rs".to_string()],
+            pathspec_from_file: None,
+            instructions: None,
+            prompt: None,
+        };
+        let request =
+            build_review_request(&args).expect("infers uncommitted review request from paths");
+
+        let expected = ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            pathspecs: vec!["src/lib.rs".to_string(), "src/main.rs".to_string()],
+            user_facing_hint: None,
+        };
+
+        assert_eq!(request, expected);
+    }
+
+    #[test]
     fn builds_review_request_with_dot_slash_paths() {
         let args = ReviewArgs {
             uncommitted: true,
@@ -1962,6 +1989,35 @@ mod tests {
     }
 
     #[test]
+    fn infers_uncommitted_review_request_from_pathspec_file() {
+        let tmp = tempfile::NamedTempFile::new().expect("temp file");
+        std::fs::write(tmp.path(), " src/lib.rs \nsrc/main.rs\n\nsrc/lib.rs\n")
+            .expect("write pathspec file");
+
+        let args = ReviewArgs {
+            uncommitted: false,
+            staged: false,
+            base: None,
+            commit: None,
+            commit_title: None,
+            paths: Vec::new(),
+            pathspec_from_file: Some(tmp.path().to_path_buf()),
+            instructions: None,
+            prompt: None,
+        };
+        let request = build_review_request(&args)
+            .expect("infers uncommitted review request from pathspec file");
+
+        let expected = ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            pathspecs: vec!["src/lib.rs".to_string(), "src/main.rs".to_string()],
+            user_facing_hint: None,
+        };
+
+        assert_eq!(request, expected);
+    }
+
+    #[test]
     fn rejects_empty_review_pathspec_file() {
         let tmp = tempfile::NamedTempFile::new().expect("temp file");
         std::fs::write(tmp.path(), " \n\t\n").expect("write pathspec file");
@@ -1982,6 +2038,28 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "Review pathspecs must include at least one non-empty path"
+        );
+    }
+
+    #[test]
+    fn rejects_bare_review_request_without_target_or_prompt() {
+        let args = ReviewArgs {
+            uncommitted: false,
+            staged: false,
+            base: None,
+            commit: None,
+            commit_title: None,
+            paths: Vec::new(),
+            pathspec_from_file: None,
+            instructions: None,
+            prompt: None,
+        };
+        let error = build_review_request(&args)
+            .expect_err("rejects bare review request without target or prompt");
+
+        assert_eq!(
+            error.to_string(),
+            "Specify --uncommitted, --staged, --base, --commit, or provide custom review instructions. Path-scoped review defaults to uncommitted review when --paths or --pathspec-from-file is provided"
         );
     }
 
