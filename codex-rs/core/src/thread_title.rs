@@ -21,21 +21,26 @@ use tracing::warn;
 
 const TITLE_MIN_WORDS: usize = 3;
 const TITLE_MAX_WORDS: usize = 7;
-const CLAUDE_TITLE_PROMPT: &str = r#"Generate a concise, sentence-case title (3-7 words) that captures the main topic or goal of this coding session. The title should be clear enough that the user recognizes the session in a list.
+const CLAUDE_TITLE_PROMPT: &str = r#"Generate a very short, sentence-case title (3-7 words) that captures the main topic or goal of this coding session.
 Guidelines:
-- Keep it very short.
-- Prefer 3-5 words when possible.
-- If a clear title would be too long, compress it aggressively.
+- Users often only see the first 12 visible characters. Put the gist there first.
+- The first 12 visible characters should usually be enough to recognize the session.
+- Target 24 visible characters or fewer, including spaces.
+- Prefer 3-4 words when possible.
+- Put the main noun and verb first.
+- If a clear title would be too long, compress aggressively and drop filler words.
+- Do not bury the distinguishing topic near the end.
 - Use sentence case: capitalize only the first word and proper nouns.
 Return JSON with a single "title" field.
 Good examples:
-{"title": "Fix mobile login"}
-{"title": "Add OAuth sign-in"}
-{"title": "Debug failing CI"}
-{"title": "Refine API errors"}
+{"title": "Fix login bug"}
+{"title": "Cmux keybind fix"}
+{"title": "Swift title audit"}
+{"title": "CI failure debug"}
 Bad (too vague): {"title": "Code changes"}
-Bad (too long): {"title": "Fix login button behavior on older mobile Safari"}
-Bad (wrong case): {"title": "Fix Login Button On Mobile"}"#;
+Bad (gist too late): {"title": "Investigate cmux keybinds"}
+Bad (too long): {"title": "Investigate workspace keybinds across tools"}
+Bad (wrong case): {"title": "Fix Login Bug"}"#;
 const CLAUDE_RETITLE_PROMPT: &str = r#"Given the current title for a coding session and the latest meaningful user request, decide whether the title should change.
 Return JSON with exactly 2 fields:
 {"should_update": false, "title": "Current title"}
@@ -47,7 +52,14 @@ Rules:
 - Do not update for wording tweaks, follow-up clarifications, or temporary subtasks.
 - Do not update when the current title still accurately describes the session.
 - If should_update is false, return the unchanged current title.
-- If should_update is true, return a concise sentence-case title in 3-7 words and keep it very short.
+- If should_update is true, return a concise sentence-case title in 3-7 words.
+- Users often only see the first 12 visible characters. Put the gist there first.
+- The first 12 visible characters should usually be enough to recognize the session.
+- Target 24 visible characters or fewer, including spaces.
+- Prefer 3-4 words when possible.
+- Put the main noun and verb first.
+- If needed, compress aggressively and drop filler words.
+- Do not bury the distinguishing topic near the end.
 "#;
 
 #[derive(Debug, Deserialize)]
@@ -683,22 +695,36 @@ mod tests {
     fn title_generation_instructions_match_claude_reverse_engineered_prompt() {
         assert_eq!(
             title_generation_instructions(),
-            r#"Generate a concise, sentence-case title (3-7 words) that captures the main topic or goal of this coding session. The title should be clear enough that the user recognizes the session in a list.
+            r#"Generate a very short, sentence-case title (3-7 words) that captures the main topic or goal of this coding session.
 Guidelines:
-- Keep it very short.
-- Prefer 3-5 words when possible.
-- If a clear title would be too long, compress it aggressively.
+- Users often only see the first 12 visible characters. Put the gist there first.
+- The first 12 visible characters should usually be enough to recognize the session.
+- Target 24 visible characters or fewer, including spaces.
+- Prefer 3-4 words when possible.
+- Put the main noun and verb first.
+- If a clear title would be too long, compress aggressively and drop filler words.
+- Do not bury the distinguishing topic near the end.
 - Use sentence case: capitalize only the first word and proper nouns.
 Return JSON with a single "title" field.
 Good examples:
-{"title": "Fix mobile login"}
-{"title": "Add OAuth sign-in"}
-{"title": "Debug failing CI"}
-{"title": "Refine API errors"}
+{"title": "Fix login bug"}
+{"title": "Cmux keybind fix"}
+{"title": "Swift title audit"}
+{"title": "CI failure debug"}
 Bad (too vague): {"title": "Code changes"}
-Bad (too long): {"title": "Fix login button behavior on older mobile Safari"}
-Bad (wrong case): {"title": "Fix Login Button On Mobile"}"#
+Bad (gist too late): {"title": "Investigate cmux keybinds"}
+Bad (too long): {"title": "Investigate workspace keybinds across tools"}
+Bad (wrong case): {"title": "Fix Login Bug"}"#
         );
+    }
+
+    #[test]
+    fn retitle_instructions_front_load_the_gist() {
+        let instructions = retitle_instructions();
+        assert!(instructions.contains("first 12 visible characters"));
+        assert!(instructions.contains("24 visible characters or fewer, including spaces"));
+        assert!(instructions.contains("Put the main noun and verb first."));
+        assert!(instructions.contains("Do not bury the distinguishing topic near the end."));
     }
 
     #[test]

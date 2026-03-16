@@ -25,13 +25,10 @@ async fn first_turn_title_uses_thread_title_model_and_low_reasoning() -> anyhow:
 
     let title_mock = mount_sse_once_match(
         &server,
-        body_string_contains("Generate a concise, sentence-case title (3-7 words)"),
+        body_string_contains("Users often only see the first 12 visible characters"),
         sse(vec![
             ev_response_created("resp-title"),
-            ev_assistant_message(
-                "msg-title",
-                "{\"title\":\"Fix terminal title naming flow\"}",
-            ),
+            ev_assistant_message("msg-title", "{\"title\":\"Fix title naming flow\"}"),
             ev_completed("resp-title"),
         ]),
     )
@@ -80,7 +77,7 @@ async fn first_turn_title_uses_thread_title_model_and_low_reasoning() -> anyhow:
     .await;
     assert_eq!(
         title_event.thread_name.as_deref(),
-        Some("Fix terminal title naming flow")
+        Some("Fix title naming flow")
     );
 
     wait_for_event(&test.codex, |event| {
@@ -99,7 +96,7 @@ async fn first_turn_title_uses_thread_title_model_and_low_reasoning() -> anyhow:
             request.body_json()["model"].as_str() == Some("gpt-5.1")
                 && request
                     .instructions_text()
-                    .contains("Generate a concise, sentence-case title (3-7 words)")
+                    .contains("Target 24 visible characters or fewer, including spaces.")
         })
         .unwrap();
     assert_eq!(
@@ -134,10 +131,10 @@ async fn first_turn_title_falls_back_to_session_model_when_unset() -> anyhow::Re
 
     let title_mock = mount_sse_once_match(
         &server,
-        body_string_contains("Generate a concise, sentence-case title (3-7 words)"),
+        body_string_contains("Users often only see the first 12 visible characters"),
         sse(vec![
             ev_response_created("resp-title"),
-            ev_assistant_message("msg-title", "{\"title\":\"Keep session model for titles\"}"),
+            ev_assistant_message("msg-title", "{\"title\":\"Use session model titles\"}"),
             ev_completed("resp-title"),
         ]),
     )
@@ -188,7 +185,7 @@ async fn first_turn_title_falls_back_to_session_model_when_unset() -> anyhow::Re
     .await;
     assert_eq!(
         title_event.thread_name.as_deref(),
-        Some("Keep session model for titles")
+        Some("Use session model titles")
     );
 
     wait_for_event(&test.codex, |event| {
