@@ -21,15 +21,20 @@ use tracing::warn;
 
 const TITLE_MIN_WORDS: usize = 3;
 const TITLE_MAX_WORDS: usize = 7;
-const CLAUDE_TITLE_PROMPT: &str = r#"Generate a concise, sentence-case title (3-7 words) that captures the main topic or goal of this coding session. The title should be clear enough that the user recognizes the session in a list. Use sentence case: capitalize only the first word and proper nouns.
+const CLAUDE_TITLE_PROMPT: &str = r#"Generate a concise, sentence-case title (3-7 words) that captures the main topic or goal of this coding session. The title should be clear enough that the user recognizes the session in a list.
+Guidelines:
+- Keep it very short.
+- Prefer 3-5 words when possible.
+- If a clear title would be too long, compress it aggressively.
+- Use sentence case: capitalize only the first word and proper nouns.
 Return JSON with a single "title" field.
 Good examples:
-{"title": "Fix login button on mobile"}
-{"title": "Add OAuth authentication"}
-{"title": "Debug failing CI tests"}
-{"title": "Refactor API client error handling"}
+{"title": "Fix mobile login"}
+{"title": "Add OAuth sign-in"}
+{"title": "Debug failing CI"}
+{"title": "Refine API errors"}
 Bad (too vague): {"title": "Code changes"}
-Bad (too long): {"title": "Investigate and fix the issue where the login button does not respond on mobile devices"}
+Bad (too long): {"title": "Fix login button behavior on older mobile Safari"}
 Bad (wrong case): {"title": "Fix Login Button On Mobile"}"#;
 const CLAUDE_RETITLE_PROMPT: &str = r#"Given the current title for a coding session and the latest meaningful user request, decide whether the title should change.
 Return JSON with exactly 2 fields:
@@ -42,7 +47,7 @@ Rules:
 - Do not update for wording tweaks, follow-up clarifications, or temporary subtasks.
 - Do not update when the current title still accurately describes the session.
 - If should_update is false, return the unchanged current title.
-- If should_update is true, return a concise sentence-case title in 3-7 words.
+- If should_update is true, return a concise sentence-case title in 3-7 words and keep it very short.
 "#;
 
 #[derive(Debug, Deserialize)]
@@ -678,15 +683,20 @@ mod tests {
     fn title_generation_instructions_match_claude_reverse_engineered_prompt() {
         assert_eq!(
             title_generation_instructions(),
-            r#"Generate a concise, sentence-case title (3-7 words) that captures the main topic or goal of this coding session. The title should be clear enough that the user recognizes the session in a list. Use sentence case: capitalize only the first word and proper nouns.
+            r#"Generate a concise, sentence-case title (3-7 words) that captures the main topic or goal of this coding session. The title should be clear enough that the user recognizes the session in a list.
+Guidelines:
+- Keep it very short.
+- Prefer 3-5 words when possible.
+- If a clear title would be too long, compress it aggressively.
+- Use sentence case: capitalize only the first word and proper nouns.
 Return JSON with a single "title" field.
 Good examples:
-{"title": "Fix login button on mobile"}
-{"title": "Add OAuth authentication"}
-{"title": "Debug failing CI tests"}
-{"title": "Refactor API client error handling"}
+{"title": "Fix mobile login"}
+{"title": "Add OAuth sign-in"}
+{"title": "Debug failing CI"}
+{"title": "Refine API errors"}
 Bad (too vague): {"title": "Code changes"}
-Bad (too long): {"title": "Investigate and fix the issue where the login button does not respond on mobile devices"}
+Bad (too long): {"title": "Fix login button behavior on older mobile Safari"}
 Bad (wrong case): {"title": "Fix Login Button On Mobile"}"#
         );
     }
