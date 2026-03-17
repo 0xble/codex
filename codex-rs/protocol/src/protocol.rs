@@ -2723,9 +2723,6 @@ pub enum ReviewDelivery {
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
 pub enum ReviewTarget {
-    /// Review only the currently staged changes.
-    StagedChanges,
-
     /// Review the working tree: staged, unstaged, and untracked files.
     UncommittedChanges,
 
@@ -2753,8 +2750,6 @@ pub enum ReviewTarget {
 /// Review request sent to the review session.
 pub struct ReviewRequest {
     pub target: ReviewTarget,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub pathspecs: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub user_facing_hint: Option<String>,

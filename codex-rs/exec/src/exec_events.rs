@@ -123,10 +123,6 @@ pub enum ThreadItemDetails {
     /// Tracks the agent's running to-do list. It starts when the plan is first
     /// issued, updates as steps change state, and completes when the turn ends.
     TodoList(TodoListItem),
-    /// Signals that a review run has entered review mode.
-    EnteredReviewMode(ReviewModeItem),
-    /// Signals that a review run has exited review mode with rendered output.
-    ExitedReviewMode(ReviewModeItem),
     /// Describes a non-fatal error surfaced as an item.
     Error(ErrorItem),
 }
@@ -313,10 +309,4 @@ pub struct TodoItem {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct TodoListItem {
     pub items: Vec<TodoItem>,
-}
-
-/// Review lifecycle item emitted by `codex exec review`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
-pub struct ReviewModeItem {
-    pub review: String,
 }

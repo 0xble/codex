@@ -626,7 +626,6 @@ impl CodexMessageProcessor {
 
     fn review_request_from_target(
         target: ApiReviewTarget,
-        pathspecs: Vec<String>,
     ) -> Result<(ReviewRequest, String), JSONRPCErrorError> {
         fn invalid_request(message: String) -> JSONRPCErrorError {
             JSONRPCErrorError {
@@ -637,7 +636,6 @@ impl CodexMessageProcessor {
         }
 
         let cleaned_target = match target {
-            ApiReviewTarget::StagedChanges => ApiReviewTarget::StagedChanges,
             ApiReviewTarget::UncommittedChanges => ApiReviewTarget::UncommittedChanges,
             ApiReviewTarget::BaseBranch { branch } => {
                 let branch = branch.trim().to_string();
@@ -670,23 +668,16 @@ impl CodexMessageProcessor {
         };
 
         let core_target = match cleaned_target {
-            ApiReviewTarget::StagedChanges => CoreReviewTarget::StagedChanges,
             ApiReviewTarget::UncommittedChanges => CoreReviewTarget::UncommittedChanges,
             ApiReviewTarget::BaseBranch { branch } => CoreReviewTarget::BaseBranch { branch },
             ApiReviewTarget::Commit { sha, title } => CoreReviewTarget::Commit { sha, title },
             ApiReviewTarget::Custom { instructions } => CoreReviewTarget::Custom { instructions },
         };
 
+        let hint = codex_core::review_prompts::user_facing_hint(&core_target);
         let review_request = ReviewRequest {
             target: core_target,
-            pathspecs,
-            user_facing_hint: None,
-        };
-        let hint = codex_core::review_prompts::user_facing_hint_for_request(&review_request)
-            .map_err(|err| invalid_request(err.to_string()))?;
-        let review_request = ReviewRequest {
             user_facing_hint: Some(hint.clone()),
-            ..review_request
         };
 
         Ok((review_request, hint))
@@ -2068,7 +2059,6 @@ impl CodexMessageProcessor {
         let ThreadStartParams {
             model,
             model_provider,
-            thread_id,
             service_tier,
             cwd,
             approval_policy,
@@ -2121,7 +2111,6 @@ impl CodexMessageProcessor {
                 request_id,
                 config,
                 typesafe_overrides,
-                thread_id,
                 dynamic_tools,
                 persist_extended_history,
                 service_name,
@@ -2195,7 +2184,6 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
-        requested_thread_id: Option<String>,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
         persist_extended_history: bool,
         service_name: Option<String>,
@@ -2224,107 +2212,6 @@ impl CodexMessageProcessor {
         };
 
         let dynamic_tools = dynamic_tools.unwrap_or_default();
-        let requested_thread_id = match requested_thread_id {
-            Some(thread_id) => match ThreadId::from_string(&thread_id) {
-                Ok(thread_id) => Some(thread_id),
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("invalid thread id `{thread_id}`: {err}"),
-                        data: None,
-                    };
-                    listener_task_context
-                        .outgoing
-                        .send_error(request_id, error)
-                        .await;
-                    return;
-                }
-            },
-            None => None,
-        };
-        if let Some(thread_id) = requested_thread_id.as_ref() {
-            if listener_task_context
-                .thread_manager
-                .get_thread(*thread_id)
-                .await
-                .is_ok()
-            {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("thread already exists: {thread_id}"),
-                    data: None,
-                };
-                listener_task_context
-                    .outgoing
-                    .send_error(request_id, error)
-                    .await;
-                return;
-            }
-            match find_thread_path_by_id_str(
-                &listener_task_context.codex_home,
-                &thread_id.to_string(),
-            )
-            .await
-            {
-                Ok(Some(_)) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("thread already exists: {thread_id}"),
-                        data: None,
-                    };
-                    listener_task_context
-                        .outgoing
-                        .send_error(request_id, error)
-                        .await;
-                    return;
-                }
-                Ok(None) => {}
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!("failed to inspect requested thread id: {err}"),
-                        data: None,
-                    };
-                    listener_task_context
-                        .outgoing
-                        .send_error(request_id, error)
-                        .await;
-                    return;
-                }
-            }
-            match find_archived_thread_path_by_id_str(
-                &listener_task_context.codex_home,
-                &thread_id.to_string(),
-            )
-            .await
-            {
-                Ok(Some(_)) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("thread already exists: {thread_id}"),
-                        data: None,
-                    };
-                    listener_task_context
-                        .outgoing
-                        .send_error(request_id, error)
-                        .await;
-                    return;
-                }
-                Ok(None) => {}
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!("failed to inspect requested thread id: {err}"),
-                        data: None,
-                    };
-                    listener_task_context
-                        .outgoing
-                        .send_error(request_id, error)
-                        .await;
-                    return;
-                }
-            }
-        }
         let core_dynamic_tools = if dynamic_tools.is_empty() {
             Vec::new()
         } else {
@@ -2359,7 +2246,6 @@ impl CodexMessageProcessor {
                 core_dynamic_tools,
                 persist_extended_history,
                 service_name,
-                requested_thread_id,
                 request_trace,
             )
             .instrument(tracing::info_span!(
@@ -2474,16 +2360,9 @@ impl CodexMessageProcessor {
                     .await;
             }
             Err(err) => {
-                let (code, message) = match err {
-                    CodexErr::InvalidRequest(message) => (INVALID_REQUEST_ERROR_CODE, message),
-                    other => (
-                        INTERNAL_ERROR_CODE,
-                        format!("error creating thread: {other}"),
-                    ),
-                };
                 let error = JSONRPCErrorError {
-                    code,
-                    message,
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("error creating thread: {err}"),
                     data: None,
                 };
                 listener_task_context
@@ -7056,7 +6935,6 @@ impl CodexMessageProcessor {
         let ReviewStartParams {
             thread_id,
             target,
-            pathspecs,
             delivery,
         } = params;
         let (parent_thread_id, parent_thread) = match self.load_thread(&thread_id).await {
@@ -7067,14 +6945,13 @@ impl CodexMessageProcessor {
             }
         };
 
-        let (review_request, display_text) =
-            match Self::review_request_from_target(target, pathspecs) {
-                Ok(value) => value,
-                Err(err) => {
-                    self.outgoing.send_error(request_id, err).await;
-                    return;
-                }
-            };
+        let (review_request, display_text) = match Self::review_request_from_target(target) {
+            Ok(value) => value,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
 
         let delivery = delivery.unwrap_or(ApiReviewDelivery::Inline).to_core();
         match delivery {

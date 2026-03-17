@@ -8,7 +8,6 @@ mod ghost_commits;
 mod info;
 mod operations;
 mod platform;
-mod staged_snapshot;
 
 pub use apply::ApplyGitRequest;
 pub use apply::ApplyGitResult;
@@ -49,7 +48,6 @@ pub use platform::create_symlink;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-pub use staged_snapshot::StagedReviewSnapshot;
 use ts_rs::TS;
 
 type CommitID = String;

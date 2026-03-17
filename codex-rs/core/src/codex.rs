@@ -65,7 +65,6 @@ use codex_exec_server::EnvironmentManager;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_features::unstable_features_warning_event;
-use codex_git_utils::StagedReviewSnapshot;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
@@ -4721,7 +4720,6 @@ mod handlers {
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
     use crate::context_manager::is_user_turn_boundary;
-    use codex_git_utils::StagedReviewSnapshot;
     use codex_protocol::config_types::CollaborationMode;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
@@ -5568,31 +5566,12 @@ mod handlers {
         sess.refresh_mcp_servers_if_requested(&turn_context).await;
         match resolve_review_request(review_request, turn_context.cwd.as_path()) {
             Ok(resolved) => {
-                let staged_snapshot = if matches!(resolved.target, ReviewTarget::StagedChanges) {
-                    match StagedReviewSnapshot::new(turn_context.cwd.as_path()) {
-                        Ok(snapshot) => Some(Arc::new(snapshot)),
-                        Err(err) => {
-                            let event = Event {
-                                id: sub_id,
-                                msg: EventMsg::Error(ErrorEvent {
-                                    message: err.to_string(),
-                                    codex_error_info: Some(CodexErrorInfo::Other),
-                                }),
-                            };
-                            sess.send_event(&turn_context, event.msg).await;
-                            return;
-                        }
-                    }
-                } else {
-                    None
-                };
                 spawn_review_thread(
                     Arc::clone(sess),
                     Arc::clone(config),
                     turn_context.clone(),
                     sub_id,
                     resolved,
-                    staged_snapshot,
                 )
                 .await;
             }
@@ -5617,7 +5596,6 @@ async fn spawn_review_thread(
     parent_turn_context: Arc<TurnContext>,
     sub_id: String,
     resolved: crate::review_prompts::ResolvedReviewRequest,
-    staged_snapshot: Option<Arc<StagedReviewSnapshot>>,
 ) {
     let model = config
         .review_model
@@ -5688,13 +5666,7 @@ async fn spawn_review_thread(
         .model_reasoning_summary
         .unwrap_or(model_info.default_reasoning_summary);
     let session_source = parent_turn_context.session_source.clone();
-    let review_cwd = staged_snapshot
-        .as_ref()
-        .map(|snapshot| {
-            AbsolutePathBuf::try_from(snapshot.cwd().to_path_buf())
-                .expect("staged review snapshot cwd must be absolute")
-        })
-        .unwrap_or_else(|| parent_turn_context.cwd.clone());
+    let review_cwd = parent_turn_context.cwd.clone();
 
     per_turn_config.cwd = review_cwd.clone();
 
@@ -5763,13 +5735,11 @@ async fn spawn_review_thread(
     // TODO(ccunningham): Review turns currently rely on `spawn_task` for TurnComplete but do not
     // emit a parent TurnStarted. Consider giving review a full parent turn lifecycle
     // (TurnStarted + TurnComplete) for consistency with other standalone tasks.
-    sess.spawn_task(tc.clone(), input, ReviewTask::new(staged_snapshot))
-        .await;
+    sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
 
     // Announce entering review mode so UIs can switch modes.
     let review_request = ReviewRequest {
         target: resolved.target,
-        pathspecs: resolved.pathspecs,
         user_facing_hint: Some(resolved.user_facing_hint),
     };
     sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))

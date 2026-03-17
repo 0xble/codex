@@ -26,7 +26,6 @@ use crate::exec_events::McpToolCallStatus;
 use crate::exec_events::PatchApplyStatus;
 use crate::exec_events::PatchChangeKind;
 use crate::exec_events::ReasoningItem;
-use crate::exec_events::ReviewModeItem;
 use crate::exec_events::ThreadErrorEvent;
 use crate::exec_events::ThreadEvent;
 use crate::exec_events::ThreadItem;
@@ -40,7 +39,6 @@ use crate::exec_events::TurnStartedEvent;
 use crate::exec_events::Usage;
 use crate::exec_events::WebSearchItem;
 use codex_core::config::Config;
-use codex_core::review_format::render_review_output_text;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -58,9 +56,6 @@ use serde_json::Value as JsonValue;
 use tracing::error;
 use tracing::warn;
 
-const REVIEW_INTERRUPTED_MESSAGE: &str =
-    "Review was interrupted. Please re-run /review and wait for it to complete.";
-
 pub struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
     last_proposed_plan: Option<String>,
@@ -74,7 +69,6 @@ pub struct EventProcessorWithJsonOutput {
     running_mcp_tool_calls: HashMap<String, RunningMcpToolCall>,
     running_collab_tool_calls: HashMap<String, RunningCollabToolCall>,
     running_web_search_calls: HashMap<String, String>,
-    running_review_item_id: Option<String>,
     last_critical_error: Option<ThreadErrorEvent>,
 }
 
@@ -118,7 +112,6 @@ impl EventProcessorWithJsonOutput {
             running_mcp_tool_calls: HashMap::new(),
             running_collab_tool_calls: HashMap::new(),
             running_web_search_calls: HashMap::new(),
-            running_review_item_id: None,
             last_critical_error: None,
         }
     }
@@ -167,8 +160,6 @@ impl EventProcessorWithJsonOutput {
                 Vec::new()
             }
             protocol::EventMsg::TurnStarted(ev) => self.handle_task_started(ev),
-            protocol::EventMsg::EnteredReviewMode(ev) => self.handle_entered_review_mode(ev),
-            protocol::EventMsg::ExitedReviewMode(ev) => self.handle_exited_review_mode(ev),
             protocol::EventMsg::TurnComplete(_) => self.handle_task_complete(),
             protocol::EventMsg::Error(ev) => {
                 let error = ThreadErrorEvent {
@@ -755,46 +746,7 @@ impl EventProcessorWithJsonOutput {
 
     fn handle_task_started(&mut self, _: &protocol::TurnStartedEvent) -> Vec<ThreadEvent> {
         self.last_critical_error = None;
-        self.running_review_item_id = None;
         vec![ThreadEvent::TurnStarted(TurnStartedEvent {})]
-    }
-
-    fn handle_entered_review_mode(
-        &mut self,
-        ev: &codex_protocol::protocol::ReviewRequest,
-    ) -> Vec<ThreadEvent> {
-        let item_id = self.get_next_item_id();
-        self.running_review_item_id = Some(item_id.clone());
-        let item = ThreadItem {
-            id: item_id,
-            details: ThreadItemDetails::EnteredReviewMode(ReviewModeItem {
-                review: ev
-                    .user_facing_hint
-                    .clone()
-                    .unwrap_or_else(|| "Review requested.".to_string()),
-            }),
-        };
-        vec![ThreadEvent::ItemStarted(ItemStartedEvent { item })]
-    }
-
-    fn handle_exited_review_mode(
-        &mut self,
-        ev: &codex_protocol::protocol::ExitedReviewModeEvent,
-    ) -> Vec<ThreadEvent> {
-        let item = ThreadItem {
-            id: self
-                .running_review_item_id
-                .take()
-                .unwrap_or_else(|| self.get_next_item_id()),
-            details: ThreadItemDetails::ExitedReviewMode(ReviewModeItem {
-                review: ev
-                    .review_output
-                    .as_ref()
-                    .map(render_review_output_text)
-                    .unwrap_or_else(|| REVIEW_INTERRUPTED_MESSAGE.to_string()),
-            }),
-        };
-        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
     }
 
     fn handle_task_complete(&mut self) -> Vec<ThreadEvent> {

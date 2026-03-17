@@ -210,12 +210,6 @@
           "type": "null"
         }
       ]
-    },
-    "threadId": {
-      "type": [
-        "string",
-        "null"
-      ]
     }
   },
   "title": "ThreadStartParams",

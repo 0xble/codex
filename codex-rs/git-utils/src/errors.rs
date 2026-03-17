@@ -22,8 +22,6 @@ pub enum GitToolingError {
     },
     #[error("{path:?} is not a git repository")]
     NotAGitRepository { path: PathBuf },
-    #[error("{path:?} does not have a HEAD commit yet")]
-    NoHeadCommit { path: PathBuf },
     #[error("path {path:?} must be relative to the repository root")]
     NonRelativePath { path: PathBuf },
     #[error("path {path:?} escapes the repository root")]

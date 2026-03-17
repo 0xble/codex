@@ -1,8 +1,6 @@
-use std::borrow::Cow;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use codex_git_utils::StagedReviewSnapshot;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -10,121 +8,33 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentMessageDeltaEvent;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::SubAgentSource;
-use codex_utils_template::Template;
-use std::time::Duration;
-use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::config::Constrained;
+use crate::features::Feature;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::state::TaskKind;
-use codex_features::Feature;
 use codex_protocol::user_input::UserInput;
-use std::sync::LazyLock;
 
 use super::SessionTask;
 use super::SessionTaskContext;
 
-static REVIEW_EXIT_SUCCESS_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    let normalized =
-        normalize_review_template_line_endings(crate::client_common::REVIEW_EXIT_SUCCESS_TMPL);
-    Template::parse(normalized.as_ref())
-        .unwrap_or_else(|err| panic!("review exit success template must parse: {err}"))
-});
-
-#[derive(Clone)]
-pub(crate) struct ReviewTask {
-    _staged_snapshot: Option<Arc<StagedReviewSnapshot>>,
-}
-
-struct ReviewCompletion {
-    review_output: Option<ReviewOutputEvent>,
-    user_message: String,
-    assistant_message: String,
-}
-
-enum ReviewInterruption {
-    Interrupted,
-    IdleTimeout,
-}
-
-const REVIEW_IDLE_TIMEOUT_ENV: &str = "CODEX_REVIEW_IDLE_TIMEOUT_MS";
-const REVIEW_TIMEOUT_ASSISTANT_MESSAGE: &str =
-    "Review timed out waiting for reviewer progress. Please narrow the review scope and try again.";
+#[derive(Clone, Copy)]
+pub(crate) struct ReviewTask;
 
 impl ReviewTask {
-    pub(crate) fn new(staged_snapshot: Option<Arc<StagedReviewSnapshot>>) -> Self {
-        Self {
-            _staged_snapshot: staged_snapshot,
-        }
-    }
-}
-
-impl ReviewCompletion {
-    fn success(review_output: ReviewOutputEvent) -> Self {
-        let mut findings_str = String::new();
-        let text = review_output.overall_explanation.trim();
-        if !text.is_empty() {
-            findings_str.push_str(text);
-        }
-        if !review_output.findings.is_empty() {
-            let block = format_review_findings_block(&review_output.findings, /*selection*/ None);
-            findings_str.push_str(&format!("\n{block}"));
-        }
-
-        Self {
-            review_output: Some(review_output.clone()),
-            user_message: render_review_exit_success(&findings_str),
-            assistant_message: render_review_output_text(&review_output),
-        }
-    }
-
-    fn interrupted(reason: ReviewInterruption) -> Self {
-        let assistant_message = match reason {
-            ReviewInterruption::Interrupted => {
-                "Review was interrupted. Please re-run /review and wait for it to complete."
-                    .to_string()
-            }
-            ReviewInterruption::IdleTimeout => REVIEW_TIMEOUT_ASSISTANT_MESSAGE.to_string(),
-        };
-
-        Self {
-            review_output: None,
-            user_message: normalize_review_template_line_endings(
-                crate::client_common::REVIEW_EXIT_INTERRUPTED_TMPL,
-            )
-            .into_owned(),
-            assistant_message,
-        }
-    }
-}
-
-fn review_idle_timeout() -> Duration {
-    if let Ok(value) = std::env::var(REVIEW_IDLE_TIMEOUT_ENV)
-        && let Ok(timeout_ms) = value.parse::<u64>()
-    {
-        return Duration::from_millis(timeout_ms.max(1));
-    }
-
-    #[cfg(test)]
-    {
-        Duration::from_millis(200)
-    }
-
-    #[cfg(not(test))]
-    {
-        Duration::from_secs(90)
+    pub(crate) fn new() -> Self {
+        Self
     }
 }
 
@@ -145,8 +55,6 @@ impl SessionTask for ReviewTask {
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
-        let review_cancellation_token = cancellation_token.child_token();
-        let idle_timeout = review_idle_timeout();
         let _ = session.session.services.session_telemetry.counter(
             "codex.task.review",
             /*inc*/ 1,
@@ -154,42 +62,25 @@ impl SessionTask for ReviewTask {
         );
 
         // Start sub-codex conversation and get the receiver for events.
-        let completion = match start_review_conversation(
+        let output = match start_review_conversation(
             session.clone(),
             ctx.clone(),
             input,
-            review_cancellation_token.clone(),
+            cancellation_token.clone(),
         )
         .await
         {
-            Some(receiver) => {
-                process_review_events(
-                    session.clone(),
-                    ctx.clone(),
-                    receiver,
-                    review_cancellation_token,
-                    idle_timeout,
-                )
-                .await
-            }
-            None => ReviewCompletion::interrupted(ReviewInterruption::Interrupted),
+            Some(receiver) => process_review_events(session.clone(), ctx.clone(), receiver).await,
+            None => None,
         };
-        if cancellation_token.is_cancelled() {
-            return None;
+        if !cancellation_token.is_cancelled() {
+            exit_review_mode(session.clone_session(), output.clone(), ctx.clone()).await;
         }
-
-        let assistant_message = completion.assistant_message.clone();
-        emit_review_completion(session.clone_session(), completion, ctx.clone()).await;
-        Some(assistant_message)
+        None
     }
 
     async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {
-        emit_review_completion(
-            session.clone_session(),
-            ReviewCompletion::interrupted(ReviewInterruption::Interrupted),
-            ctx,
-        )
-        .await;
+        exit_review_mode(session.clone_session(), None, ctx).await;
     }
 }
 
@@ -242,37 +133,9 @@ async fn process_review_events(
     session: Arc<SessionTaskContext>,
     ctx: Arc<TurnContext>,
     receiver: async_channel::Receiver<Event>,
-    review_cancellation_token: CancellationToken,
-    idle_timeout: Duration,
-) -> ReviewCompletion {
+) -> Option<ReviewOutputEvent> {
     let mut prev_agent_message: Option<Event> = None;
-    loop {
-        let event = match timeout(idle_timeout, receiver.recv()).await {
-            Ok(Ok(event)) => event,
-            Ok(Err(_)) => return ReviewCompletion::interrupted(ReviewInterruption::Interrupted),
-            Err(_) => {
-                if review_cancellation_token.is_cancelled() {
-                    return ReviewCompletion::interrupted(ReviewInterruption::Interrupted);
-                }
-
-                review_cancellation_token.cancel();
-                session
-                    .clone_session()
-                    .send_event(
-                        ctx.as_ref(),
-                        EventMsg::Error(ErrorEvent {
-                            message: format!(
-                                "review delegate made no progress for {}; cancelling review",
-                                idle_timeout.as_secs_f32()
-                            ),
-                            codex_error_info: None,
-                        }),
-                    )
-                    .await;
-                return ReviewCompletion::interrupted(ReviewInterruption::IdleTimeout);
-            }
-        };
-
+    while let Ok(event) = receiver.recv().await {
         match event.clone().msg {
             EventMsg::AgentMessage(_) => {
                 if let Some(prev) = prev_agent_message.take() {
@@ -294,18 +157,15 @@ async fn process_review_events(
             | EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent { .. }) => {}
             EventMsg::TurnComplete(task_complete) => {
                 // Parse review output from the last agent message (if present).
-                return task_complete
+                let out = task_complete
                     .last_agent_message
                     .as_deref()
-                    .map(parse_review_output_event)
-                    .map(ReviewCompletion::success)
-                    .unwrap_or_else(|| {
-                        ReviewCompletion::interrupted(ReviewInterruption::Interrupted)
-                    });
+                    .map(parse_review_output_event);
+                return out;
             }
             EventMsg::TurnAborted(_) => {
                 // Cancellation or abort: consumer will finalize with None.
-                return ReviewCompletion::interrupted(ReviewInterruption::Interrupted);
+                return None;
             }
             other => {
                 session
@@ -315,6 +175,8 @@ async fn process_review_events(
             }
         }
     }
+    // Channel closed without TurnComplete: treat as interrupted.
+    None
 }
 
 /// Parse a ReviewOutputEvent from a text blob returned by the reviewer model.
@@ -341,13 +203,34 @@ fn parse_review_output_event(text: &str) -> ReviewOutputEvent {
 
 /// Emits an ExitedReviewMode Event with optional ReviewOutput,
 /// and records a developer message with the review output.
-async fn emit_review_completion(
+pub(crate) async fn exit_review_mode(
     session: Arc<Session>,
-    completion: ReviewCompletion,
+    review_output: Option<ReviewOutputEvent>,
     ctx: Arc<TurnContext>,
 ) {
     const REVIEW_USER_MESSAGE_ID: &str = "review_rollout_user";
     const REVIEW_ASSISTANT_MESSAGE_ID: &str = "review_rollout_assistant";
+    let (user_message, assistant_message) = if let Some(out) = review_output.clone() {
+        let mut findings_str = String::new();
+        let text = out.overall_explanation.trim();
+        if !text.is_empty() {
+            findings_str.push_str(text);
+        }
+        if !out.findings.is_empty() {
+            let block = format_review_findings_block(&out.findings, /*selection*/ None);
+            findings_str.push_str(&format!("\n{block}"));
+        }
+        let rendered =
+            crate::client_common::REVIEW_EXIT_SUCCESS_TMPL.replace("{results}", &findings_str);
+        let assistant_message = render_review_output_text(&out);
+        (rendered, assistant_message)
+    } else {
+        let rendered = crate::client_common::REVIEW_EXIT_INTERRUPTED_TMPL.to_string();
+        let assistant_message =
+            "Review was interrupted. Please re-run /review and wait for it to complete."
+                .to_string();
+        (rendered, assistant_message)
+    };
 
     session
         .record_conversation_items(
@@ -355,9 +238,7 @@ async fn emit_review_completion(
             &[ResponseItem::Message {
                 id: Some(REVIEW_USER_MESSAGE_ID.to_string()),
                 role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: completion.user_message,
-                }],
+                content: vec![ContentItem::InputText { text: user_message }],
                 end_turn: None,
                 phase: None,
             }],
@@ -367,9 +248,7 @@ async fn emit_review_completion(
     session
         .send_event(
             ctx.as_ref(),
-            EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
-                review_output: completion.review_output.clone(),
-            }),
+            EventMsg::ExitedReviewMode(ExitedReviewModeEvent { review_output }),
         )
         .await;
     session
@@ -379,7 +258,7 @@ async fn emit_review_completion(
                 id: Some(REVIEW_ASSISTANT_MESSAGE_ID.to_string()),
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
-                    text: completion.assistant_message,
+                    text: assistant_message,
                 }],
                 end_turn: None,
                 phase: None,
@@ -391,41 +270,4 @@ async fn emit_review_completion(
     // materialize rollout persistence. Do this after emitting review output so
     // file creation + git metadata collection cannot delay client-facing items.
     session.ensure_rollout_materialized().await;
-}
-
-fn render_review_exit_success(results: &str) -> String {
-    REVIEW_EXIT_SUCCESS_TEMPLATE
-        .render([("results", results)])
-        .unwrap_or_else(|err| panic!("review exit success template must render: {err}"))
-}
-
-fn normalize_review_template_line_endings(template: &str) -> Cow<'_, str> {
-    if template.contains('\r') {
-        Cow::Owned(template.replace("\r\n", "\n").replace('\r', "\n"))
-    } else {
-        Cow::Borrowed(template)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::normalize_review_template_line_endings;
-    use super::render_review_exit_success;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn render_review_exit_success_replaces_results_placeholder() {
-        assert_eq!(
-            render_review_exit_success("Finding A\nFinding B"),
-            "<user_action>\n  <context>User initiated a review task. Here's the full review output from reviewer model. User may select one or more comments to resolve.</context>\n  <action>review</action>\n  <results>\n  Finding A\nFinding B\n  </results>\n  </user_action>\n"
-        );
-    }
-
-    #[test]
-    fn normalize_review_template_line_endings_rewrites_crlf() {
-        assert_eq!(
-            normalize_review_template_line_endings("<user_action>\r\n  <results>\r\n  None.\r\n"),
-            "<user_action>\n  <results>\n  None.\n"
-        );
-    }
 }

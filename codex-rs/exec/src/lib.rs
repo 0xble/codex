@@ -86,7 +86,6 @@ use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::Path;
@@ -609,7 +608,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
         (Some(ExecCommand::Review(review_cli)), _, _) => {
             let review_request = build_review_request(review_cli)?;
-            let summary = codex_core::review_prompts::user_facing_hint_for_request(&review_request)?;
+            let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);
             (InitialOperation::Review { review_request }, summary)
         }
         (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
@@ -723,7 +722,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     params: ReviewStartParams {
                         thread_id: primary_thread_id_for_span.clone(),
                         target: review_target_to_api(review_request.target),
-                        pathspecs: review_request.pathspecs,
                         delivery: None,
                     },
                 },
@@ -976,7 +974,6 @@ fn session_configured_from_thread_resume_response(
 
 fn review_target_to_api(target: ReviewTarget) -> ApiReviewTarget {
     match target {
-        ReviewTarget::StagedChanges => ApiReviewTarget::StagedChanges,
         ReviewTarget::UncommittedChanges => ApiReviewTarget::UncommittedChanges,
         ReviewTarget::BaseBranch { branch } => ApiReviewTarget::BaseBranch { branch },
         ReviewTarget::Commit { sha, title } => ApiReviewTarget::Commit { sha, title },
@@ -1663,11 +1660,8 @@ fn resolve_root_prompt(prompt_arg: Option<String>) -> String {
 }
 
 fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
-    let pathspecs = resolve_review_pathspecs(args)?;
     let target = if args.uncommitted {
         ReviewTarget::UncommittedChanges
-    } else if args.staged {
-        ReviewTarget::StagedChanges
     } else if let Some(branch) = args.base.clone() {
         ReviewTarget::BaseBranch { branch }
     } else if let Some(sha) = args.commit.clone() {
@@ -1675,7 +1669,7 @@ fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
             sha,
             title: args.commit_title.clone(),
         }
-    } else if let Some(prompt_arg) = args.instructions.clone().or_else(|| args.prompt.clone()) {
+    } else if let Some(prompt_arg) = args.prompt.clone() {
         let prompt = resolve_prompt(Some(prompt_arg)).trim().to_string();
         if prompt.is_empty() {
             anyhow::bail!("Review prompt cannot be empty");
@@ -1683,58 +1677,14 @@ fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
         ReviewTarget::Custom {
             instructions: prompt,
         }
-    } else if !pathspecs.is_empty() {
-        ReviewTarget::UncommittedChanges
     } else {
-        anyhow::bail!(
-            "Specify --uncommitted, --staged, --base, --commit, or provide custom review instructions. Path-scoped review defaults to uncommitted review when --paths or --pathspec-from-file is provided"
-        );
+        anyhow::bail!("Specify --uncommitted, --base, --commit, or provide custom review instructions.");
     };
 
     Ok(ReviewRequest {
         target,
-        pathspecs,
         user_facing_hint: None,
     })
-}
-
-fn resolve_review_pathspecs(args: &ReviewArgs) -> anyhow::Result<Vec<String>> {
-    if !args.paths.is_empty() {
-        return normalize_review_pathspecs(args.paths.clone());
-    }
-
-    let Some(path) = args.pathspec_from_file.as_deref() else {
-        return Ok(Vec::new());
-    };
-
-    let contents = std::fs::read_to_string(path).map_err(|error| {
-        anyhow::anyhow!("Failed to read pathspec file {}: {error}", path.display())
-    })?;
-    let pathspecs = contents.lines().map(ToString::to_string).collect();
-    normalize_review_pathspecs(pathspecs)
-}
-
-fn normalize_review_pathspecs(pathspecs: Vec<String>) -> anyhow::Result<Vec<String>> {
-    let mut normalized = Vec::new();
-    let mut seen = HashSet::new();
-
-    for pathspec in pathspecs {
-        let trimmed = pathspec.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let owned = codex_core::review_prompts::normalize_repo_relative_pathspec(trimmed);
-        if seen.insert(owned.clone()) {
-            normalized.push(owned);
-        }
-    }
-
-    if normalized.is_empty() {
-        anyhow::bail!("Review pathspecs must include at least one non-empty path");
-    }
-
-    Ok(normalized)
 }
 
 
@@ -1785,20 +1735,15 @@ mod tests {
     fn builds_uncommitted_review_request() {
         let args = ReviewArgs {
             uncommitted: true,
-            staged: false,
             base: None,
             commit: None,
             commit_title: None,
-            paths: Vec::new(),
-            pathspec_from_file: None,
-            instructions: None,
             prompt: None,
         };
         let request = build_review_request(&args).expect("builds uncommitted review request");
 
         let expected = ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
-            pathspecs: Vec::new(),
             user_facing_hint: None,
         };
 
@@ -1809,13 +1754,9 @@ mod tests {
     fn builds_commit_review_request_with_title() {
         let args = ReviewArgs {
             uncommitted: false,
-            staged: false,
             base: None,
             commit: Some("123456789".to_string()),
             commit_title: Some("Add review command".to_string()),
-            paths: Vec::new(),
-            pathspec_from_file: None,
-            instructions: None,
             prompt: None,
         };
         let request = build_review_request(&args).expect("builds commit review request");
@@ -1825,7 +1766,6 @@ mod tests {
                 sha: "123456789".to_string(),
                 title: Some("Add review command".to_string()),
             },
-            pathspecs: Vec::new(),
             user_facing_hint: None,
         };
 
@@ -1836,13 +1776,9 @@ mod tests {
     fn builds_custom_review_request_trims_prompt() {
         let args = ReviewArgs {
             uncommitted: false,
-            staged: false,
             base: None,
             commit: None,
             commit_title: None,
-            paths: Vec::new(),
-            pathspec_from_file: None,
-            instructions: None,
             prompt: Some("  custom review instructions  ".to_string()),
         };
         let request = build_review_request(&args).expect("builds custom review request");
@@ -1851,207 +1787,19 @@ mod tests {
             target: ReviewTarget::Custom {
                 instructions: "custom review instructions".to_string(),
             },
-            pathspecs: Vec::new(),
             user_facing_hint: None,
         };
 
         assert_eq!(request, expected);
-    }
-
-    #[test]
-    fn builds_staged_review_request() {
-        let args = ReviewArgs {
-            uncommitted: false,
-            staged: true,
-            base: None,
-            commit: None,
-            commit_title: None,
-            paths: Vec::new(),
-            pathspec_from_file: None,
-            instructions: None,
-            prompt: None,
-        };
-        let request = build_review_request(&args).expect("builds staged review request");
-
-        let expected = ReviewRequest {
-            target: ReviewTarget::StagedChanges,
-            pathspecs: Vec::new(),
-            user_facing_hint: None,
-        };
-
-        assert_eq!(request, expected);
-    }
-
-    #[test]
-    fn builds_review_request_with_paths() {
-        let args = ReviewArgs {
-            uncommitted: true,
-            staged: false,
-            base: None,
-            commit: None,
-            commit_title: None,
-            paths: vec![
-                " src/lib.rs ".to_string(),
-                "src/main.rs".to_string(),
-                "src/lib.rs".to_string(),
-            ],
-            pathspec_from_file: None,
-            instructions: None,
-            prompt: None,
-        };
-        let request = build_review_request(&args).expect("builds review request with paths");
-
-        let expected = ReviewRequest {
-            target: ReviewTarget::UncommittedChanges,
-            pathspecs: vec!["src/lib.rs".to_string(), "src/main.rs".to_string()],
-            user_facing_hint: None,
-        };
-
-        assert_eq!(request, expected);
-    }
-
-    #[test]
-    fn infers_uncommitted_review_request_from_paths() {
-        let args = ReviewArgs {
-            uncommitted: false,
-            staged: false,
-            base: None,
-            commit: None,
-            commit_title: None,
-            paths: vec!["src/lib.rs".to_string(), "src/main.rs".to_string()],
-            pathspec_from_file: None,
-            instructions: None,
-            prompt: None,
-        };
-        let request =
-            build_review_request(&args).expect("infers uncommitted review request from paths");
-
-        let expected = ReviewRequest {
-            target: ReviewTarget::UncommittedChanges,
-            pathspecs: vec!["src/lib.rs".to_string(), "src/main.rs".to_string()],
-            user_facing_hint: None,
-        };
-
-        assert_eq!(request, expected);
-    }
-
-    #[test]
-    fn builds_review_request_with_dot_slash_paths() {
-        let args = ReviewArgs {
-            uncommitted: true,
-            staged: false,
-            base: None,
-            commit: None,
-            commit_title: None,
-            paths: vec!["./src/lib.rs".to_string(), "././src/main.rs".to_string()],
-            pathspec_from_file: None,
-            instructions: None,
-            prompt: None,
-        };
-        let request = build_review_request(&args).expect("builds review request with paths");
-
-        let expected = ReviewRequest {
-            target: ReviewTarget::UncommittedChanges,
-            pathspecs: vec!["src/lib.rs".to_string(), "src/main.rs".to_string()],
-            user_facing_hint: None,
-        };
-
-        assert_eq!(request, expected);
-    }
-
-    #[test]
-    fn builds_review_request_with_pathspec_file() {
-        let tmp = tempfile::NamedTempFile::new().expect("temp file");
-        std::fs::write(tmp.path(), " src/lib.rs \nsrc/main.rs\n\nsrc/lib.rs\n")
-            .expect("write pathspec file");
-
-        let args = ReviewArgs {
-            uncommitted: true,
-            staged: false,
-            base: None,
-            commit: None,
-            commit_title: None,
-            paths: Vec::new(),
-            pathspec_from_file: Some(tmp.path().to_path_buf()),
-            instructions: None,
-            prompt: None,
-        };
-        let request =
-            build_review_request(&args).expect("builds review request with pathspec file");
-
-        let expected = ReviewRequest {
-            target: ReviewTarget::UncommittedChanges,
-            pathspecs: vec!["src/lib.rs".to_string(), "src/main.rs".to_string()],
-            user_facing_hint: None,
-        };
-
-        assert_eq!(request, expected);
-    }
-
-    #[test]
-    fn infers_uncommitted_review_request_from_pathspec_file() {
-        let tmp = tempfile::NamedTempFile::new().expect("temp file");
-        std::fs::write(tmp.path(), " src/lib.rs \nsrc/main.rs\n\nsrc/lib.rs\n")
-            .expect("write pathspec file");
-
-        let args = ReviewArgs {
-            uncommitted: false,
-            staged: false,
-            base: None,
-            commit: None,
-            commit_title: None,
-            paths: Vec::new(),
-            pathspec_from_file: Some(tmp.path().to_path_buf()),
-            instructions: None,
-            prompt: None,
-        };
-        let request = build_review_request(&args)
-            .expect("infers uncommitted review request from pathspec file");
-
-        let expected = ReviewRequest {
-            target: ReviewTarget::UncommittedChanges,
-            pathspecs: vec!["src/lib.rs".to_string(), "src/main.rs".to_string()],
-            user_facing_hint: None,
-        };
-
-        assert_eq!(request, expected);
-    }
-
-    #[test]
-    fn rejects_empty_review_pathspec_file() {
-        let tmp = tempfile::NamedTempFile::new().expect("temp file");
-        std::fs::write(tmp.path(), " \n\t\n").expect("write pathspec file");
-
-        let args = ReviewArgs {
-            uncommitted: true,
-            staged: false,
-            base: None,
-            commit: None,
-            commit_title: None,
-            paths: Vec::new(),
-            pathspec_from_file: Some(tmp.path().to_path_buf()),
-            instructions: None,
-            prompt: None,
-        };
-        let error = build_review_request(&args).expect_err("rejects empty pathspec file");
-
-        assert_eq!(
-            error.to_string(),
-            "Review pathspecs must include at least one non-empty path"
-        );
     }
 
     #[test]
     fn rejects_bare_review_request_without_target_or_prompt() {
         let args = ReviewArgs {
             uncommitted: false,
-            staged: false,
             base: None,
             commit: None,
             commit_title: None,
-            paths: Vec::new(),
-            pathspec_from_file: None,
-            instructions: None,
             prompt: None,
         };
         let error = build_review_request(&args)
@@ -2059,7 +1807,7 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "Specify --uncommitted, --staged, --base, --commit, or provide custom review instructions. Path-scoped review defaults to uncommitted review when --paths or --pathspec-from-file is provided"
+            "Specify --uncommitted, --base, --commit, or provide custom review instructions."
         );
     }
 
@@ -2067,23 +1815,17 @@ mod tests {
     fn builds_custom_review_request_from_instructions_flag() {
         let args = ReviewArgs {
             uncommitted: false,
-            staged: false,
             base: None,
             commit: None,
             commit_title: None,
-            paths: vec!["src/lib.rs".to_string(), "src/main.rs".to_string()],
-            pathspec_from_file: None,
-            instructions: Some("  focus on panics  ".to_string()),
-            prompt: None,
+            prompt: Some("  focus on panics  ".to_string()),
         };
-        let request =
-            build_review_request(&args).expect("builds custom review request from instructions");
+        let request = build_review_request(&args).expect("builds custom review request from prompt");
 
         let expected = ReviewRequest {
             target: ReviewTarget::Custom {
                 instructions: "focus on panics".to_string(),
             },
-            pathspecs: vec!["src/lib.rs".to_string(), "src/main.rs".to_string()],
             user_facing_hint: None,
         };
 

@@ -2556,8 +2556,6 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         mcp_manager,
         Arc::new(SkillsWatcher::noop()),
         AgentControl::default(),
-        None,
-        None,
     )
     .await;
 
@@ -2675,7 +2673,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             ..HooksConfig::default()
         }),
         rollout: Mutex::new(None),
-        requested_thread_id_lease: Mutex::new(None),
         user_shell: Arc::new(default_user_shell()),
         shell_snapshot_tx: watch::channel(None).0,
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -3518,7 +3515,6 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             ..HooksConfig::default()
         }),
         rollout: Mutex::new(None),
-        requested_thread_id_lease: Mutex::new(None),
         user_shell: Arc::new(default_user_shell()),
         shell_snapshot_tx: watch::channel(None).0,
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -4797,7 +4793,7 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
         text: "start review".to_string(),
         text_elements: Vec::new(),
     }];
-    sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new(None))
+    sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new())
         .await;
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;

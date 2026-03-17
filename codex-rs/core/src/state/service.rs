@@ -13,7 +13,6 @@ use crate::models_manager::manager::ModelsManager;
 use crate::plugins::PluginsManager;
 use crate::skills_watcher::SkillsWatcher;
 use crate::state_db::StateDbHandle;
-use crate::thread_manager::RequestedThreadIdLease;
 use crate::tools::code_mode::CodeModeService;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::sandboxing::ApprovalStore;
@@ -39,7 +38,6 @@ pub(crate) struct SessionServices {
     pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) hooks: Hooks,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,
-    pub(crate) requested_thread_id_lease: Mutex<Option<RequestedThreadIdLease>>,
     pub(crate) user_shell: Arc<crate::shell::Shell>,
     pub(crate) shell_snapshot_tx: watch::Sender<Option<Arc<crate::shell_snapshot::ShellSnapshot>>>,
     pub(crate) show_raw_agent_reasoning: bool,

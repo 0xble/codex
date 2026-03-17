@@ -367,34 +367,6 @@ fn exec_resume_accepts_global_flags_after_subcommand() -> anyhow::Result<()> {
 }
 
 #[test]
-fn exec_resume_with_missing_name_starts_new_session() -> anyhow::Result<()> {
-    let test = test_codex_exec();
-    let fixture = exec_fixture()?;
-    let repo_root = exec_repo_root()?;
-
-    let marker = format!("resume-missing-name-{}", Uuid::new_v4());
-    let prompt = format!("echo {marker}");
-
-    test.cmd()
-        .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        .env("OPENAI_BASE_URL", "http://unused.local")
-        .arg("--skip-git-repo-check")
-        .arg("-C")
-        .arg(&repo_root)
-        .arg("resume")
-        .arg("friendly-name")
-        .arg(&prompt)
-        .assert()
-        .success();
-
-    let sessions_dir = test.home_path().join("sessions");
-    find_session_file_containing_marker(&sessions_dir, &marker)
-        .expect("resume fallback should create a new session file");
-
-    Ok(())
-}
-
-#[test]
 fn exec_resume_by_id_appends_to_existing_file() -> anyhow::Result<()> {
     let test = test_codex_exec();
     let fixture = exec_fixture()?;

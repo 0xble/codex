@@ -5501,7 +5501,6 @@ impl ChatWidget {
                     target: ReviewTarget::Custom {
                         instructions: prepared_args,
                     },
-                    pathspecs: Vec::new(),
                     user_facing_hint: None,
                 }));
                 self.bottom_pane.drain_pending_submission_state();
@@ -7143,10 +7142,7 @@ impl ChatWidget {
         }
         self.is_review_mode = true;
         let hint = review.user_facing_hint.unwrap_or_else(|| {
-            codex_core::review_prompts::user_facing_hint(
-                &review.target,
-                &review.pathspecs,
-            )
+            codex_core::review_prompts::user_facing_hint(&review.target)
         });
         let banner = format!(">> Code review started: {hint} <<");
         self.add_to_history(history_cell::new_review_status_line(banner));
@@ -7169,9 +7165,7 @@ impl ChatWidget {
     fn on_entered_review_mode(&mut self, review: ReviewRequest, from_replay: bool) {
         let hint = review
             .user_facing_hint
-            .unwrap_or_else(|| {
-                codex_core::review_prompts::user_facing_hint(&review.target, &review.pathspecs)
-            });
+            .unwrap_or_else(|| codex_core::review_prompts::user_facing_hint(&review.target));
         self.enter_review_mode_with_hint(hint, from_replay);
     }
 
@@ -10834,7 +10828,6 @@ impl ChatWidget {
             actions: vec![Box::new(move |tx: &AppEventSender| {
                 tx.review(ReviewRequest {
                     target: ReviewTarget::UncommittedChanges,
-                    pathspecs: Vec::new(),
                     user_facing_hint: None,
                 });
             })],
@@ -10888,7 +10881,6 @@ impl ChatWidget {
                         target: ReviewTarget::BaseBranch {
                             branch: branch.clone(),
                         },
-                        pathspecs: Vec::new(),
                         user_facing_hint: None,
                     });
                 })],
@@ -10925,7 +10917,6 @@ impl ChatWidget {
                             sha: sha.clone(),
                             title: Some(subject.clone()),
                         },
-                        pathspecs: Vec::new(),
                         user_facing_hint: None,
                     });
                 })],
@@ -10960,7 +10951,6 @@ impl ChatWidget {
                     target: ReviewTarget::Custom {
                         instructions: trimmed,
                     },
-                    pathspecs: Vec::new(),
                     user_facing_hint: None,
                 });
             }),
@@ -11696,7 +11686,6 @@ pub(crate) fn show_review_commit_picker_with_entries(
                         sha: sha.clone(),
                         title: Some(subject.clone()),
                     },
-                    pathspecs: Vec::new(),
                     user_facing_hint: None,
                 });
             })],

@@ -2552,8 +2552,6 @@ pub struct ThreadStartParams {
     pub model: Option<String>,
     #[ts(optional = nullable)]
     pub model_provider: Option<String>,
-    #[ts(optional = nullable)]
-    pub thread_id: Option<String>,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_double_option",
@@ -4001,8 +3999,6 @@ pub struct TurnStartParams {
 pub struct ReviewStartParams {
     pub thread_id: String,
     pub target: ReviewTarget,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub pathspecs: Vec<String>,
 
     /// Where to run the review: inline (default) on the current thread or
     /// detached on a new thread (returned in `reviewThreadId`).
@@ -4027,9 +4023,6 @@ pub struct ReviewStartResponse {
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type", export_to = "v2/")]
 pub enum ReviewTarget {
-    /// Review only the currently staged changes.
-    StagedChanges,
-
     /// Review the working tree: staged, unstaged, and untracked files.
     UncommittedChanges,
 
