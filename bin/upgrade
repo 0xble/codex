@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "manual: build via cargo"
+echo "cd ~/Repos/codex && cargo build --release"
