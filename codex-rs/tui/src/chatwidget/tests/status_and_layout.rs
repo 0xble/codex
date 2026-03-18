@@ -673,6 +673,36 @@ async fn fast_status_indicator_is_hidden_when_fast_mode_is_off() {
     assert!(!chat.should_show_fast_status(chat.current_model(), chat.current_service_tier(),));
 }
 
+#[tokio::test]
+async fn session_configured_syncs_service_tier_from_active_thread() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.set_service_tier(Some(ServiceTier::Fast));
+
+    chat.handle_codex_event(Event {
+        id: "session-configured".to_string(),
+        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+            session_id: ThreadId::new(),
+            forked_from_id: None,
+            thread_name: None,
+            model: "gpt-5.4".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: ApprovalsReviewer::default(),
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            cwd: test_project_path(),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: Some(PathBuf::new()),
+        }),
+    });
+
+    assert_eq!(chat.current_service_tier(), None);
+}
+
 // Snapshot test: ChatWidget at very small heights (idle)
 // Ensures overall layout behaves when terminal height is extremely constrained.
 #[tokio::test]

@@ -568,7 +568,7 @@ async fn undo_started_hides_interrupt_hint() {
 }
 
 #[tokio::test]
-async fn fast_slash_command_updates_and_persists_local_service_tier() {
+async fn fast_slash_command_updates_local_service_tier_without_persisting() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);
 
@@ -585,15 +585,10 @@ async fn fast_slash_command_updates_and_persists_local_service_tier() {
         )),
         "expected fast-mode override app event; events: {events:?}"
     );
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AppEvent::PersistServiceTierSelection {
-                service_tier: Some(ServiceTier::Fast),
-            }
-        )),
-        "expected fast-mode persistence app event; events: {events:?}"
-    );
+    assert!(events.iter().all(|event| matches!(
+        event,
+        AppEvent::CodexOp(Op::OverrideTurnContext { .. }) | AppEvent::InsertHistoryCell(_)
+    )));
 
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }

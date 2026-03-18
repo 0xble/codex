@@ -1977,6 +1977,8 @@ impl ChatWidget {
                 tracing::warn!(path = %event.cwd.display(), %err, "session cwd should be absolute");
             }
         }
+        self.config.service_tier = event.service_tier;
+        self.refresh_status_line();
         if let Err(err) = self
             .config
             .permissions
@@ -9763,6 +9765,7 @@ impl ChatWidget {
 
     fn set_service_tier_selection(&mut self, service_tier: Option<ServiceTier>) {
         self.set_service_tier(service_tier);
+        self.refresh_status_line();
         self.app_event_tx.send(AppEvent::CodexOp(
             AppCommand::override_turn_context(
                 /*cwd*/ None,
@@ -9779,8 +9782,9 @@ impl ChatWidget {
             )
             .into_core(),
         ));
-        self.app_event_tx
-            .send(AppEvent::PersistServiceTierSelection { service_tier });
+        let status = if service_tier.is_some() { "on" } else { "off" };
+        self.add_info_message(format!("Fast mode set to {status}"), None);
+        self.request_redraw();
     }
 
     pub(crate) fn current_model(&self) -> &str {

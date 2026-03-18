@@ -3560,9 +3560,7 @@ impl App {
     }
 
     fn fresh_session_config(&self) -> Config {
-        let mut config = self.config.clone();
-        config.service_tier = self.chat_widget.current_service_tier();
-        config
+        self.config.clone()
     }
 
     async fn drain_active_thread_events(&mut self, tui: &mut tui::Tui) -> Result<()> {
@@ -5079,39 +5077,6 @@ impl App {
                         } else {
                             self.chat_widget.add_error_message(format!(
                                 "Failed to save default personality: {err}"
-                            ));
-                        }
-                    }
-                }
-            }
-            AppEvent::PersistServiceTierSelection { service_tier } => {
-                self.refresh_status_line();
-                let profile = self.active_profile.as_deref();
-                match ConfigEditsBuilder::new(&self.config.codex_home)
-                    .with_profile(profile)
-                    .set_service_tier(service_tier)
-                    .apply()
-                    .await
-                {
-                    Ok(()) => {
-                        let status = if service_tier.is_some() { "on" } else { "off" };
-                        let mut message = format!("Fast mode set to {status}");
-                        if let Some(profile) = profile {
-                            message.push_str(" for ");
-                            message.push_str(profile);
-                            message.push_str(" profile");
-                        }
-                        self.chat_widget.add_info_message(message, /*hint*/ None);
-                    }
-                    Err(err) => {
-                        tracing::error!(error = %err, "failed to persist fast mode selection");
-                        if let Some(profile) = profile {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to save Fast mode for profile `{profile}`: {err}"
-                            ));
-                        } else {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to save default Fast mode: {err}"
                             ));
                         }
                     }
@@ -10445,17 +10410,14 @@ guardian_approval = true
     }
 
     #[tokio::test]
-    async fn fresh_session_config_uses_current_service_tier() {
+    async fn fresh_session_config_keeps_base_service_tier() {
         let mut app = make_test_app().await;
         app.chat_widget
             .set_service_tier(Some(codex_protocol::config_types::ServiceTier::Fast));
 
         let config = app.fresh_session_config();
 
-        assert_eq!(
-            config.service_tier,
-            Some(codex_protocol::config_types::ServiceTier::Fast)
-        );
+        assert_eq!(config.service_tier, app.config.service_tier);
     }
 
     #[tokio::test]
