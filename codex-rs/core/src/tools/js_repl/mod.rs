@@ -811,9 +811,6 @@ impl JsReplManager {
     }
 
     pub async fn interrupt_turn_exec(&self, turn_id: &str) -> Result<bool, FunctionCallError> {
-        let _permit = self.exec_lock.clone().acquire_owned().await.map_err(|_| {
-            FunctionCallError::RespondToModel("js_repl execution unavailable".to_string())
-        })?;
         if !self.turn_interrupt_requires_reset(turn_id).await {
             return Ok(false);
         }
@@ -1132,6 +1129,8 @@ impl JsReplManager {
                 .clone()
                 .unwrap_or_else(|| exec_env.command.first().cloned().unwrap_or_default()),
         );
+        #[cfg(unix)]
+        cmd.process_group(0);
         cmd.current_dir(&exec_env.cwd);
         cmd.env_clear();
         cmd.envs(exec_env.env);
@@ -1185,6 +1184,12 @@ impl JsReplManager {
         } else {
             warn!("js_repl kernel missing stderr");
         }
+        tokio::spawn(Self::watch_kernel_exit(
+            Arc::clone(&child),
+            Arc::clone(&self.kernel),
+            Arc::clone(&pending_execs),
+            shutdown.clone(),
+        ));
 
         Ok(KernelState {
             child,
@@ -1269,6 +1274,38 @@ impl JsReplManager {
             }
         }
 
+        #[cfg(unix)]
+        if let Some(pid) = pid {
+            let kill_result = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+            if kill_result != 0 {
+                let err = std::io::Error::last_os_error();
+                warn!(
+                    kernel_pid = ?Some(pid),
+                    kill_reason = reason,
+                    error = %err,
+                    "failed to send kill signal to js_repl kernel process group"
+                );
+                if let Err(err) = guard.start_kill() {
+                    warn!(
+                        kernel_pid = ?Some(pid),
+                        kill_reason = reason,
+                        error = %err,
+                        "failed to send kill signal to js_repl kernel"
+                    );
+                    return;
+                }
+            }
+        } else if let Err(err) = guard.start_kill() {
+            warn!(
+                kernel_pid = ?pid,
+                kill_reason = reason,
+                error = %err,
+                "failed to send kill signal to js_repl kernel"
+            );
+            return;
+        }
+
+        #[cfg(not(unix))]
         if let Err(err) = guard.start_kill() {
             warn!(
                 kernel_pid = ?pid,
@@ -1570,6 +1607,51 @@ impl JsReplManager {
                 kernel_stderr_tail = %snapshot.stderr_tail,
                 "js_repl kernel terminated unexpectedly"
             );
+        }
+    }
+
+    async fn watch_kernel_exit(
+        child: Arc<Mutex<Child>>,
+        manager_kernel: Arc<Mutex<Option<KernelState>>>,
+        pending_execs: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<ExecResultMessage>>>>,
+        shutdown: CancellationToken,
+    ) {
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled() => break,
+                _ = tokio::time::sleep(Duration::from_millis(25)) => {}
+            }
+
+            let exited = {
+                let mut guard = child.lock().await;
+                match guard.try_wait() {
+                    Ok(Some(_)) => true,
+                    Ok(None) => false,
+                    Err(err) => {
+                        warn!("failed to inspect js_repl kernel in exit watcher: {err}");
+                        true
+                    }
+                }
+            };
+            if !exited {
+                continue;
+            }
+
+            let has_pending_execs = !pending_execs.lock().await.is_empty();
+            if has_pending_execs {
+                continue;
+            }
+
+            let mut kernel = manager_kernel.lock().await;
+            let should_clear = kernel
+                .as_ref()
+                .is_some_and(|state| Arc::ptr_eq(&state.child, &child));
+            if should_clear
+                && let Some(state) = kernel.take()
+            {
+                state.shutdown.cancel();
+            }
+            break;
         }
     }
 

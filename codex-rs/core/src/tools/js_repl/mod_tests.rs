@@ -20,6 +20,7 @@ use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::Path;
 use tempfile::tempdir;
+use tokio::time::Instant;
 
 fn set_danger_full_access(turn: &mut crate::codex::TurnContext) {
     turn.sandbox_policy
@@ -811,7 +812,9 @@ for (let i = 0; i < paths.length; i++) {{
     };
 
     handle.abort();
+    let interrupt_started = Instant::now();
     assert!(manager.interrupt_turn_exec(&turn.sub_id).await?);
+    let interrupt_elapsed = interrupt_started.elapsed();
 
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
@@ -830,7 +833,11 @@ for (let i = 0; i < paths.length; i++) {{
 
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert!(first_file.exists());
-    assert!(!second_file.exists());
+    assert!(
+        !second_file.exists(),
+        "second file exists after interrupt reset took {:?}",
+        interrupt_elapsed
+    );
 
     let result = manager
         .execute(

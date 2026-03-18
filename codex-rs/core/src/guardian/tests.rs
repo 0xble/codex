@@ -878,10 +878,19 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
         additional_permissions: None,
         justification: Some("Inspect repo state before proceeding.".to_string()),
     };
-    assert_eq!(
-        review_approval_request(&session, &turn, initial_request, /*retry_reason*/ None).await,
-        ReviewDecision::Approved
-    );
+    let initial_decision = match tokio::time::timeout(
+        Duration::from_secs(20),
+        review_approval_request(&session, &turn, initial_request, None),
+    )
+    .await
+    {
+        Ok(decision) => decision,
+        Err(_) => panic!(
+            "initial guardian review should complete; observed {} mock requests",
+            server.requests().await.len()
+        ),
+    };
+    assert_eq!(initial_decision, ReviewDecision::Approved);
 
     let second_request = GuardianApprovalRequest::Shell {
         id: "shell-guardian-2".to_string(),
@@ -926,13 +935,17 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
         "second guardian request was not observed"
     );
 
-    let third_decision = review_approval_request(
-        &session,
-        &turn,
-        third_request,
-        Some("parallel follow-up".to_string()),
+    let third_decision = tokio::time::timeout(
+        Duration::from_secs(20),
+        review_approval_request(
+            &session,
+            &turn,
+            third_request,
+            Some("parallel follow-up".to_string()),
+        ),
     )
-    .await;
+    .await
+    .expect("parallel guardian review should complete");
     assert_eq!(third_decision, ReviewDecision::Approved);
     let requests = server.requests().await;
     assert_eq!(requests.len(), 3);
@@ -956,11 +969,17 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
     gate_tx
         .send(())
         .expect("second guardian review gate should still be open");
-    assert_eq!(second_review.await?, ReviewDecision::Approved);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), &mut second_review)
+            .await
+            .expect("unblocked trunk guardian review should complete")?,
+        ReviewDecision::Approved
+    );
     server.shutdown().await;
 
     Ok(())
 }
+
 #[test]
 fn guardian_review_session_config_preserves_parent_network_proxy() {
     let mut parent_config = test_config();

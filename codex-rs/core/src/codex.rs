@@ -3931,6 +3931,12 @@ impl Session {
         };
         {
             let mut state = self.state.lock().await;
+            if matches!(
+                state.session_configuration.session_source,
+                SessionSource::SubAgent(_)
+            ) {
+                return;
+            }
             if !state.start_auto_thread_name_generation() {
                 return;
             }
