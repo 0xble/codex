@@ -284,13 +284,21 @@ impl AppServerSession {
         self.client.next_event().await
     }
 
-    pub(crate) async fn start_thread(&mut self, config: &Config) -> Result<AppServerStartedThread> {
+    pub(crate) async fn start_thread(
+        &mut self,
+        config: &Config,
+        session_id: Option<String>,
+    ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let response: ThreadStartResponse = self
             .client
             .request_typed(ClientRequest::ThreadStart {
                 request_id,
-                params: thread_start_params_from_config(config, self.thread_params_mode()),
+                params: thread_start_params_from_config(
+                    config,
+                    self.thread_params_mode(),
+                    session_id,
+                ),
             })
             .await
             .wrap_err("thread/start failed during TUI bootstrap")?;
@@ -841,11 +849,13 @@ fn sandbox_mode_from_policy(
 fn thread_start_params_from_config(
     config: &Config,
     thread_params_mode: ThreadParamsMode,
+    session_id: Option<String>,
 ) -> ThreadStartParams {
     ThreadStartParams {
         model: config.model.clone(),
         model_provider: thread_params_mode.model_provider_from_config(config),
         cwd: thread_cwd_from_config(config, thread_params_mode),
+        session_id,
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),

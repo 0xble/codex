@@ -53,6 +53,12 @@ pub struct Cli {
     #[clap(skip)]
     pub fork_show_all: bool,
 
+    /// Use a specific UUID as the session/thread ID instead of generating one.
+    /// Useful for external wrappers that want the tmux session name and the
+    /// codex thread ID to match.
+    #[arg(long = "session-id", value_name = "UUID", hide = true)]
+    pub session_id: Option<String>,
+
     /// Model the agent should use.
     #[arg(long, short = 'm')]
     pub model: Option<String>,

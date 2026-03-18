@@ -1309,6 +1309,7 @@ async fn run_ratatui_app(
         prompt,
         images,
         no_alt_screen,
+        session_id: session_id_override,
         ..
     } = cli;
 
@@ -1348,6 +1349,7 @@ async fn run_ratatui_app(
         should_prompt_windows_sandbox_nux_at_startup,
         remote_url,
         remote_auth_token,
+        session_id_override,
     )
     .await;
 

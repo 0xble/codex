@@ -2061,6 +2061,7 @@ impl CodexMessageProcessor {
             model_provider,
             service_tier,
             cwd,
+            session_id,
             approval_policy,
             approvals_reviewer,
             sandbox,
@@ -2114,6 +2115,7 @@ impl CodexMessageProcessor {
                 dynamic_tools,
                 persist_extended_history,
                 service_name,
+                session_id,
                 experimental_raw_events,
                 request_trace,
             )
@@ -2187,6 +2189,7 @@ impl CodexMessageProcessor {
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
         persist_extended_history: bool,
         service_name: Option<String>,
+        session_id: Option<String>,
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
     ) {
@@ -2238,6 +2241,24 @@ impl CodexMessageProcessor {
                 .collect()
         };
         let core_dynamic_tool_count = core_dynamic_tools.len();
+        let requested_thread_id = match session_id {
+            Some(session_id) => match ThreadId::from_string(&session_id) {
+                Ok(thread_id) => Some(thread_id),
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid thread/session id override: {err}"),
+                        data: None,
+                    };
+                    listener_task_context
+                        .outgoing
+                        .send_error(request_id, error)
+                        .await;
+                    return;
+                }
+            },
+            None => None,
+        };
 
         match listener_task_context
             .thread_manager
@@ -2246,6 +2267,7 @@ impl CodexMessageProcessor {
                 core_dynamic_tools,
                 persist_extended_history,
                 service_name,
+                requested_thread_id,
                 request_trace,
             )
             .instrument(tracing::info_span!(

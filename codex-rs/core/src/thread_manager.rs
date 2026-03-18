@@ -439,12 +439,25 @@ impl ThreadManager {
     }
 
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
-        // Box delegated thread-spawn futures so these convenience wrappers do
-        // not inline the full spawn path into every caller's async state.
-        Box::pin(self.start_thread_with_tools(
+        self.start_thread_with_session_id(config, None).await
+    }
+
+    pub async fn start_thread_with_session_id(
+        &self,
+        config: Config,
+        session_id_override: Option<String>,
+    ) -> CodexResult<NewThread> {
+        Box::pin(self.state.spawn_thread_with_session_id(
             config,
+            InitialHistory::New,
+            Arc::clone(&self.state.auth_manager),
+            self.agent_control(),
             Vec::new(),
             /*persist_extended_history*/ false,
+            /*metrics_service_name*/ None,
+            /*parent_trace*/ None,
+            /*user_shell_override*/ None,
+            session_id_override,
         ))
         .await
     }
@@ -973,6 +986,51 @@ impl ThreadManagerState {
             inherited_exec_policy,
             user_shell_override,
             parent_trace,
+            session_id_override: None,
+        })
+        .await?;
+        self.finalize_thread_spawn(codex, thread_id, watch_registration)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn spawn_thread_with_session_id(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        auth_manager: Arc<AuthManager>,
+        agent_control: AgentControl,
+        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        persist_extended_history: bool,
+        metrics_service_name: Option<String>,
+        parent_trace: Option<W3cTraceContext>,
+        user_shell_override: Option<crate::shell::Shell>,
+        session_id_override: Option<String>,
+    ) -> CodexResult<NewThread> {
+        let watch_registration = self
+            .file_watcher
+            .register_config(&config, self.skills_manager.as_ref());
+        let CodexSpawnOk {
+            codex, thread_id, ..
+        } = Codex::spawn(CodexSpawnArgs {
+            config,
+            auth_manager,
+            models_manager: Arc::clone(&self.models_manager),
+            skills_manager: Arc::clone(&self.skills_manager),
+            plugins_manager: Arc::clone(&self.plugins_manager),
+            mcp_manager: Arc::clone(&self.mcp_manager),
+            file_watcher: Arc::clone(&self.file_watcher),
+            conversation_history: initial_history,
+            session_source: self.session_source.clone(),
+            agent_control,
+            dynamic_tools,
+            persist_extended_history,
+            metrics_service_name,
+            inherited_shell_snapshot: None,
+            inherited_exec_policy: None,
+            user_shell_override,
+            parent_trace,
+            session_id_override,
         })
         .await?;
         self.finalize_thread_spawn(codex, thread_id, watch_registration)

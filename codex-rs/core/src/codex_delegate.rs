@@ -94,6 +94,7 @@ pub(crate) async fn run_codex_thread_interactive(
         user_shell_override: None,
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
         parent_trace: None,
+        session_id_override: None,
     })
     .await?;
     let codex = Arc::new(codex);
