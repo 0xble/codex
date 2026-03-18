@@ -109,14 +109,6 @@ mod imp {
     }
 
     impl<T: Copy> Cache<T> {
-        fn get_or_init_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
-            if !self.attempted {
-                self.value = init();
-                self.attempted = true;
-            }
-            self.value
-        }
-
         fn refresh_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
             self.value = init();
             self.attempted = true;
@@ -131,8 +123,8 @@ mod imp {
 
     pub(super) fn default_colors() -> Option<DefaultColors> {
         let cache = default_colors_cache();
-        let mut cache = cache.lock().ok()?;
-        cache.get_or_init_with(|| query_default_colors().unwrap_or_default())
+        let cache = cache.lock().ok()?;
+        cache.value
     }
 
     pub(super) fn requery_default_colors() {

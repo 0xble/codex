@@ -21,8 +21,26 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
+#[cfg(unix)]
+use std::fs::OpenOptions;
 use std::io;
+#[cfg(unix)]
+use std::io::IsTerminal;
+#[cfg(unix)]
+use std::io::Read;
 use std::io::Write;
+#[cfg(unix)]
+use std::io::stdin;
+#[cfg(unix)]
+use std::io::stdout;
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(unix)]
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
@@ -183,11 +201,14 @@ where
     /// Creates a new [`Terminal`] with the given [`Backend`] and [`TerminalOptions`].
     pub fn with_options(mut backend: B) -> io::Result<Self> {
         let screen_size = backend.size()?;
-        let cursor_pos = backend.get_cursor_position().unwrap_or_else(|err| {
+        let cursor_pos = initial_cursor_position(&mut backend, screen_size).unwrap_or_else(|err| {
             // Some PTYs do not answer CPR (`ESC[6n`); continue with a safe default instead
             // of failing TUI startup.
             tracing::warn!("failed to read initial cursor position; defaulting to origin: {err}");
-            Position { x: 0, y: 0 }
+            Position {
+                x: 0,
+                y: screen_size.height.saturating_sub(1),
+            }
         });
         Ok(Self {
             backend,
@@ -497,6 +518,108 @@ where
     }
 }
 
+#[cfg(unix)]
+const INITIAL_CURSOR_QUERY_TIMEOUT: Duration = Duration::from_millis(75);
+
+#[cfg(unix)]
+fn initial_cursor_position<B: Backend + Write>(
+    _backend: &mut B,
+    screen_size: Size,
+) -> io::Result<Position> {
+    match query_cursor_position_with_timeout(INITIAL_CURSOR_QUERY_TIMEOUT) {
+        Ok(position) => Ok(position),
+        Err(_) => Ok(Position {
+            x: 0,
+            y: screen_size.height.saturating_sub(1),
+        }),
+    }
+}
+
+#[cfg(not(unix))]
+fn initial_cursor_position<B: Backend + Write>(
+    backend: &mut B,
+    _screen_size: Size,
+) -> io::Result<Position> {
+    backend.get_cursor_position()
+}
+
+#[cfg(unix)]
+fn query_cursor_position_with_timeout(timeout: Duration) -> io::Result<Position> {
+    if !stdin().is_terminal() || !stdout().is_terminal() {
+        return Err(io::Error::other("stdio is not a terminal"));
+    }
+
+    let mut tty = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open("/dev/tty")?;
+
+    tty.write_all(b"\x1b[6n")?;
+    tty.flush()?;
+
+    let deadline = Instant::now() + timeout;
+    let mut response = Vec::new();
+
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+
+        let timeout_ms = remaining.as_millis().min(i32::MAX as u128) as i32;
+        let mut pollfd = libc::pollfd {
+            fd: tty.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let poll_result = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+        if poll_result == 0 {
+            break;
+        }
+        if poll_result < 0 {
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(err);
+        }
+
+        let mut chunk = [0u8; 256];
+        loop {
+            match tty.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(bytes_read) => {
+                    response.extend_from_slice(&chunk[..bytes_read]);
+                    if let Some(position) = parse_cursor_position_response(&response) {
+                        return Ok(position);
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        "timed out waiting for cursor position response",
+    ))
+}
+
+#[cfg(unix)]
+fn parse_cursor_position_response(response: &[u8]) -> Option<Position> {
+    let start = response.windows(2).position(|window| window == b"\x1b[")? + 2;
+    let payload = &response[start..];
+    let end = payload.iter().position(|&byte| byte == b'R')?;
+    let coordinates = std::str::from_utf8(&payload[..end]).ok()?;
+    let (row, column) = coordinates.split_once(';')?;
+    let row = row.parse::<u16>().ok()?.saturating_sub(1);
+    let column = column.parse::<u16>().ok()?.saturating_sub(1);
+    Some(Position { x: column, y: row })
+}
+
 use ratatui::buffer::Cell;
 
 #[derive(Debug, IsVariant)]
@@ -746,6 +869,15 @@ mod tests {
                 .iter()
                 .any(|command| matches!(command, DrawCommand::ClearToEnd { x: 2, y: 0, .. })),
             "expected clear-to-end to start after the remaining wide char; commands: {commands:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn parse_cursor_position_response_handles_cpr() {
+        assert_eq!(
+            Some(Position { x: 3, y: 1 }),
+            parse_cursor_position_response(b"\x1b[2;4R"),
         );
     }
 }

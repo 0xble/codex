@@ -36,7 +36,6 @@ use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
-use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::backend::Backend;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::execute;
@@ -58,6 +57,8 @@ use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
 use codex_core::config::types::NotificationMethod;
+use codex_core::terminal::TerminalName;
+use codex_core::terminal::terminal_info;
 
 mod event_stream;
 mod frame_rate_limiter;
@@ -308,6 +309,28 @@ fn terminal_title_enabled() -> bool {
     !terminal_title_disabled(std::env::var(TERMINAL_TITLE_DISABLE_ENV).ok().as_deref())
 }
 
+fn startup_keyboard_enhancement_supported() -> bool {
+    startup_keyboard_enhancement_supported_for_terminal(terminal_info().name)
+}
+
+fn startup_keyboard_enhancement_supported_for_terminal(name: TerminalName) -> bool {
+    match name {
+        TerminalName::AppleTerminal
+        | TerminalName::Ghostty
+        | TerminalName::Iterm2
+        | TerminalName::WarpTerminal
+        | TerminalName::VsCode
+        | TerminalName::WezTerm
+        | TerminalName::Kitty
+        | TerminalName::Alacritty
+        | TerminalName::Konsole
+        | TerminalName::GnomeTerminal
+        | TerminalName::Vte
+        | TerminalName::WindowsTerminal => true,
+        TerminalName::Dumb | TerminalName::Unknown => false,
+    }
+}
+
 pub fn set_modes() -> Result<()> {
     execute!(stdout(), EnableBracketedPaste)?;
 
@@ -523,12 +546,9 @@ impl Tui {
             None
         };
 
-        // Detect keyboard enhancement support before any EventStream is created so the
-        // crossterm poller can acquire its lock without contention.
-        let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
+        let enhanced_keys_supported = startup_keyboard_enhancement_supported();
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
-        let _ = crate::terminal_palette::default_colors();
 
         Self {
             frame_requester,
@@ -862,10 +882,12 @@ mod tests {
     #[cfg(unix)]
     use super::parse_terminal_title_response;
     use super::restore_saved_terminal_title;
+    use super::startup_keyboard_enhancement_supported_for_terminal;
     use super::terminal_title_disabled;
     use super::terminal_title_restore_supported;
     use super::terminal_title_transport_for_env;
     use super::write_terminal_title;
+    use codex_core::terminal::TerminalName;
     use pretty_assertions::assert_eq;
     use std::sync::atomic::Ordering;
 
@@ -1040,6 +1062,22 @@ mod tests {
             terminal_title_transport_for_env("xterm-256color", false, false),
             Some(TerminalTitleTransport::Direct)
         );
+    }
+
+    #[test]
+    fn startup_keyboard_enhancement_support_uses_terminal_heuristics() {
+        assert!(startup_keyboard_enhancement_supported_for_terminal(
+            TerminalName::Ghostty
+        ));
+        assert!(startup_keyboard_enhancement_supported_for_terminal(
+            TerminalName::WezTerm
+        ));
+        assert!(!startup_keyboard_enhancement_supported_for_terminal(
+            TerminalName::Unknown
+        ));
+        assert!(!startup_keyboard_enhancement_supported_for_terminal(
+            TerminalName::Dumb
+        ));
     }
 
     #[test]
