@@ -1,3 +1,20 @@
 #!/bin/sh
-echo "manual: build via cargo"
-echo "cd ~/Repos/codex/codex-rs && cargo build --release"
+set -euo pipefail
+
+INSTALL_DIR="$HOME/.local/opt/codex/local/libexec"
+SRC="$HOME/Repos/codex/codex-rs/target/release/codex"
+
+cd "$HOME/Repos/codex/codex-rs"
+cargo build --release
+
+mkdir -p "$INSTALL_DIR"
+
+# Remove old binary before copying to ensure a new inode.
+# macOS taskgated caches code signature evaluations by inode;
+# overwriting in-place (same inode) causes "Taskgated Invalid
+# Signature" SIGKILL on the new binary.
+rm -f "$INSTALL_DIR/codex"
+cp "$SRC" "$INSTALL_DIR/codex"
+
+echo "installed: $INSTALL_DIR/codex"
+"$INSTALL_DIR/codex" --version
