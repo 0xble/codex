@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+bin_path="$HOME/.local/bin/codex"
+
+[ -x "$bin_path" ]
+"$bin_path" --version | /usr/bin/grep -Fq '0xble'
+
+echo "smoke ok: codex"
