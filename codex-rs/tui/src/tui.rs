@@ -57,6 +57,7 @@ use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
 use codex_core::config::types::NotificationMethod;
+use codex_core::terminal::Multiplexer;
 use codex_core::terminal::TerminalName;
 use codex_core::terminal::terminal_info;
 
@@ -307,6 +308,15 @@ fn terminal_title_disabled(value: Option<&str>) -> bool {
 
 fn terminal_title_enabled() -> bool {
     !terminal_title_disabled(std::env::var(TERMINAL_TITLE_DISABLE_ENV).ok().as_deref())
+}
+
+fn synchronized_updates_enabled_for_multiplexer(multiplexer: Option<&Multiplexer>) -> bool {
+    !matches!(multiplexer, Some(Multiplexer::Tmux { .. }))
+}
+
+fn synchronized_updates_enabled() -> bool {
+    let terminal_info = terminal_info();
+    synchronized_updates_enabled_for_multiplexer(terminal_info.multiplexer.as_ref())
 }
 
 fn startup_keyboard_enhancement_supported() -> bool {
@@ -793,7 +803,7 @@ impl Tui {
         // the synchronized update, to avoid racing with the event reader.
         let mut pending_viewport_area = self.pending_viewport_area()?;
 
-        stdout().sync_update(|_| {
+        let draw_frame = || {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;
@@ -847,7 +857,15 @@ impl Tui {
             terminal.draw(|frame| {
                 draw_fn(frame);
             })
-        })?
+        };
+
+        if synchronized_updates_enabled() {
+            stdout().sync_update(|_| draw_frame())??;
+        } else {
+            draw_frame()?;
+        }
+
+        Ok(())
     }
 
     fn pending_viewport_area(&mut self) -> Result<Option<Rect>> {
@@ -883,10 +901,12 @@ mod tests {
     use super::parse_terminal_title_response;
     use super::restore_saved_terminal_title;
     use super::startup_keyboard_enhancement_supported_for_terminal;
+    use super::synchronized_updates_enabled_for_multiplexer;
     use super::terminal_title_disabled;
     use super::terminal_title_restore_supported;
     use super::terminal_title_transport_for_env;
     use super::write_terminal_title;
+    use codex_core::terminal::Multiplexer;
     use codex_core::terminal::TerminalName;
     use pretty_assertions::assert_eq;
     use std::sync::atomic::Ordering;
@@ -1088,5 +1108,20 @@ mod tests {
         assert!(!terminal_title_disabled(Some("True")));
         assert!(!terminal_title_disabled(Some("0")));
         assert!(!terminal_title_disabled(None));
+    }
+
+    #[test]
+    fn synchronized_updates_disabled_in_tmux() {
+        assert!(!synchronized_updates_enabled_for_multiplexer(Some(
+            &Multiplexer::Tmux { version: None }
+        )));
+    }
+
+    #[test]
+    fn synchronized_updates_enabled_outside_tmux() {
+        assert!(synchronized_updates_enabled_for_multiplexer(None));
+        assert!(synchronized_updates_enabled_for_multiplexer(Some(
+            &Multiplexer::Zellij {}
+        )));
     }
 }

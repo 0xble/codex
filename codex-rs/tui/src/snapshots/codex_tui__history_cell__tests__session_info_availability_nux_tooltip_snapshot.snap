@@ -1,10 +1,9 @@
 ---
 source: tui/src/history_cell.rs
-assertion_line: 2761
 expression: rendered
 ---
 ╭────────────────────────────────────────╮
-│ >_ OpenAI Codex (v0.113.0-0xble.0.9.4) │
+│ >_ OpenAI Codex (v0.116.0-0xble.0.1.1) │
 │                                        │
 │ model:     gpt-5   /model to change    │
 │ directory: /tmp/project                │
