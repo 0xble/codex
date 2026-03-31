@@ -1479,6 +1479,11 @@ mod tests {
         assert_eq!(args.prompt.as_deref(), Some("re-review"));
     }
 
+    #[test]
+    fn clap_command_graph_has_no_duplicate_argument_ids() {
+        MultitoolCli::command().debug_assert();
+    }
+
     fn app_server_from_args(args: &[&str]) -> AppServerCommand {
         let cli = MultitoolCli::try_parse_from(args).expect("parse");
         let Subcommand::AppServer(app_server) = cli.subcommand.expect("app-server present") else {

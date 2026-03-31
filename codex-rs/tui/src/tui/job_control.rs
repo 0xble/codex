@@ -7,6 +7,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU16;
 use std::sync::atomic::Ordering;
 
+use codex_core::terminal::TerminalTransport;
+use codex_core::terminal::terminal_transport;
 use crossterm::cursor::MoveTo;
 use crossterm::cursor::Show;
 use crossterm::event::KeyCode;
@@ -23,6 +25,10 @@ use super::EnableAlternateScroll;
 use super::Terminal;
 
 pub const SUSPEND_KEY: key_hint::KeyBinding = key_hint::ctrl(KeyCode::Char('z'));
+
+fn use_mosh_compatibility_mode() -> bool {
+    matches!(terminal_transport(), Some(TerminalTransport::Mosh))
+}
 
 /// Coordinates suspend/resume handling so the TUI can restore terminal context after SIGTSTP.
 ///
@@ -87,17 +93,23 @@ impl SuspendContext {
         let action = self.take_resume_action()?;
         match action {
             ResumeAction::RealignInline => {
-                let cursor_pos = terminal
-                    .get_cursor_position()
-                    .unwrap_or(terminal.last_known_cursor_pos);
+                let cursor_pos = if use_mosh_compatibility_mode() {
+                    terminal.last_known_cursor_pos
+                } else {
+                    terminal
+                        .get_cursor_position()
+                        .unwrap_or(terminal.last_known_cursor_pos)
+                };
                 let viewport = Rect::new(0, cursor_pos.y, 0, 0);
                 Some(PreparedResumeAction::RealignViewport(viewport))
             }
             ResumeAction::RestoreAlt => {
-                if let Ok(Position { y, .. }) = terminal.get_cursor_position()
-                    && let Some(saved) = alt_saved_viewport.as_mut()
-                {
-                    saved.y = y;
+                if let Some(saved) = alt_saved_viewport.as_mut() {
+                    if use_mosh_compatibility_mode() {
+                        saved.y = terminal.last_known_cursor_pos.y;
+                    } else if let Ok(Position { y, .. }) = terminal.get_cursor_position() {
+                        saved.y = y;
+                    }
                 }
                 Some(PreparedResumeAction::RestoreAltScreen)
             }

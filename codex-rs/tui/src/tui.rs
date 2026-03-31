@@ -24,6 +24,8 @@ use std::time::Duration;
 #[cfg(unix)]
 use std::time::Instant;
 
+use codex_core::terminal::TerminalTransport;
+use codex_core::terminal::terminal_transport;
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::DisableBracketedPaste;
@@ -311,7 +313,7 @@ fn terminal_title_enabled() -> bool {
 }
 
 fn synchronized_updates_enabled_for_multiplexer(multiplexer: Option<&Multiplexer>) -> bool {
-    !matches!(multiplexer, Some(Multiplexer::Tmux { .. }))
+    !use_mosh_compatibility_mode() && !matches!(multiplexer, Some(Multiplexer::Tmux { .. }))
 }
 
 fn synchronized_updates_enabled() -> bool {
@@ -341,10 +343,18 @@ fn startup_keyboard_enhancement_supported_for_terminal(name: TerminalName) -> bo
     }
 }
 
+fn use_mosh_compatibility_mode() -> bool {
+    matches!(terminal_transport(), Some(TerminalTransport::Mosh))
+}
+
 pub fn set_modes() -> Result<()> {
+    enable_raw_mode()?;
+    if use_mosh_compatibility_mode() {
+        return Ok(());
+    }
+
     execute!(stdout(), EnableBracketedPaste)?;
 
-    enable_raw_mode()?;
     // Enable keyboard enhancement flags so modifiers for keys like Enter are disambiguated.
     // chat_composer.rs is using a keyboard event listener to enter for any modified keys
     // to create a new line that require this.
@@ -407,10 +417,12 @@ impl Command for DisableAlternateScroll {
 }
 
 fn restore_common(should_disable_raw_mode: bool) -> Result<()> {
-    // Pop may fail on platforms that didn't support the push; ignore errors.
-    let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
-    execute!(stdout(), DisableBracketedPaste)?;
-    let _ = execute!(stdout(), DisableFocusChange);
+    if !use_mosh_compatibility_mode() {
+        execute!(stdout(), DisableBracketedPaste)?;
+        // Pop may fail on platforms that didn't support the push; ignore errors.
+        let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
+        let _ = execute!(stdout(), DisableFocusChange);
+    }
     if should_disable_raw_mode {
         disable_raw_mode()?;
     }
@@ -555,8 +567,11 @@ impl Tui {
         } else {
             None
         };
-
-        let enhanced_keys_supported = startup_keyboard_enhancement_supported();
+        let enhanced_keys_supported = if use_mosh_compatibility_mode() {
+            false
+        } else {
+            startup_keyboard_enhancement_supported()
+        };
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
 
@@ -802,8 +817,8 @@ impl Tui {
         // Precompute any viewport updates that need a cursor-position query before entering
         // the synchronized update, to avoid racing with the event reader.
         let mut pending_viewport_area = self.pending_viewport_area()?;
-
-        let draw_frame = || {
+        let mut draw_fn = Some(draw_fn);
+        let mut draw_frame = || -> Result<()> {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;
@@ -855,7 +870,9 @@ impl Tui {
             }
 
             terminal.draw(|frame| {
-                draw_fn(frame);
+                if let Some(draw_fn) = draw_fn.take() {
+                    draw_fn(frame);
+                }
             })
         };
 
@@ -869,6 +886,9 @@ impl Tui {
     }
 
     fn pending_viewport_area(&mut self) -> Result<Option<Rect>> {
+        if use_mosh_compatibility_mode() {
+            return Ok(None);
+        }
         let terminal = &mut self.terminal;
         let screen_size = terminal.size()?;
         let last_known_screen_size = terminal.last_known_screen_size;

@@ -67,6 +67,13 @@ pub enum Multiplexer {
     Zellij {},
 }
 
+/// Explicit transport compatibility mode selected by the caller.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalTransport {
+    /// The terminal UI is attached through mosh and should avoid fragile escape-sequence features.
+    Mosh,
+}
+
 /// tmux client terminal identification captured via `tmux display-message`.
 ///
 /// `termtype` corresponds to `#{client_termtype}` and typically reflects the
@@ -207,6 +214,7 @@ impl TerminalInfo {
 }
 
 static TERMINAL_INFO: OnceLock<TerminalInfo> = OnceLock::new();
+static TERMINAL_TRANSPORT: OnceLock<Option<TerminalTransport>> = OnceLock::new();
 
 /// Environment variable access used by terminal detection.
 ///
@@ -259,11 +267,31 @@ pub fn user_agent() -> String {
     terminal_info().user_agent_token()
 }
 
+/// Returns the explicitly configured terminal transport, if any.
+pub fn terminal_transport() -> Option<TerminalTransport> {
+    TERMINAL_TRANSPORT
+        .get_or_init(|| detect_terminal_transport_from_env(&ProcessEnvironment))
+        .to_owned()
+}
+
 /// Returns structured terminal metadata for the current process.
 pub fn terminal_info() -> TerminalInfo {
     TERMINAL_INFO
         .get_or_init(|| detect_terminal_info_from_env(&ProcessEnvironment))
         .clone()
+}
+
+fn detect_terminal_transport_from_env(env: &dyn Environment) -> Option<TerminalTransport> {
+    match env
+        .var_non_empty("CODEX_TUI_TRANSPORT")
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("mosh") => Some(TerminalTransport::Mosh),
+        _ => None,
+    }
 }
 
 /// Detects structured terminal metadata from an injectable environment.

@@ -57,7 +57,7 @@ pub struct Cli {
     /// Useful for external wrappers that want the tmux session name and the
     /// codex thread ID to match.
     #[arg(long = "session-id", value_name = "UUID", hide = true)]
-    pub session_id: Option<String>,
+    pub session_id_override: Option<String>,
 
     /// Model the agent should use.
     #[arg(long, short = 'm')]

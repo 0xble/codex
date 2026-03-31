@@ -1646,9 +1646,7 @@ impl JsReplManager {
             let should_clear = kernel
                 .as_ref()
                 .is_some_and(|state| Arc::ptr_eq(&state.child, &child));
-            if should_clear
-                && let Some(state) = kernel.take()
-            {
+            if should_clear && let Some(state) = kernel.take() {
                 state.shutdown.cancel();
             }
             break;

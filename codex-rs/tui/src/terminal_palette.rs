@@ -1,4 +1,6 @@
 use crate::color::perceptual_distance;
+use codex_core::terminal::TerminalTransport;
+use codex_core::terminal::terminal_transport;
 use ratatui::style::Color;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -7,6 +9,10 @@ static DEFAULT_PALETTE_VERSION: AtomicU64 = AtomicU64::new(0);
 
 fn bump_palette_version() {
     DEFAULT_PALETTE_VERSION.fetch_add(1, Ordering::Relaxed);
+}
+
+fn use_mosh_compatibility_mode() -> bool {
+    matches!(terminal_transport(), Some(TerminalTransport::Mosh))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,6 +61,9 @@ pub fn best_color(target: (u8, u8, u8)) -> Color {
 }
 
 pub fn requery_default_colors() {
+    if use_mosh_compatibility_mode() {
+        return;
+    }
     imp::requery_default_colors();
     bump_palette_version();
 }
@@ -66,6 +75,9 @@ pub struct DefaultColors {
 }
 
 pub fn default_colors() -> Option<DefaultColors> {
+    if use_mosh_compatibility_mode() {
+        return None;
+    }
     imp::default_colors()
 }
 

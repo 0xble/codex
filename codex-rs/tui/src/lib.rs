@@ -1309,7 +1309,7 @@ async fn run_ratatui_app(
         prompt,
         images,
         no_alt_screen,
-        session_id: session_id_override,
+        session_id_override,
         ..
     } = cli;
 

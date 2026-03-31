@@ -820,3 +820,27 @@ fn detects_term_fallbacks() {
     );
     assert_eq!(terminal.user_agent_token(), "unknown", "unknown_user_agent");
 }
+
+#[test]
+fn detects_explicit_mosh_transport() {
+    let env = FakeEnvironment::new().with_var("CODEX_TUI_TRANSPORT", "mosh");
+    assert_eq!(
+        detect_terminal_transport_from_env(&env),
+        Some(TerminalTransport::Mosh)
+    );
+
+    let env = FakeEnvironment::new().with_var("CODEX_TUI_TRANSPORT", " MOSH ");
+    assert_eq!(
+        detect_terminal_transport_from_env(&env),
+        Some(TerminalTransport::Mosh)
+    );
+}
+
+#[test]
+fn ignores_unknown_transport_override() {
+    let env = FakeEnvironment::new().with_var("CODEX_TUI_TRANSPORT", "ssh");
+    assert_eq!(detect_terminal_transport_from_env(&env), None);
+
+    let env = FakeEnvironment::new();
+    assert_eq!(detect_terminal_transport_from_env(&env), None);
+}
