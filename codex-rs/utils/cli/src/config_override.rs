@@ -174,6 +174,16 @@ mod tests {
     }
 
     #[test]
+    fn parses_unquoted_initial_collaboration_mode_as_string_override() {
+        let overrides = CliConfigOverrides {
+            raw_overrides: vec!["tui.initial_collaboration_mode=plan".to_string()],
+        };
+        let parsed = overrides.parse_overrides().expect("parse_overrides");
+        assert_eq!(parsed[0].0.as_str(), "tui.initial_collaboration_mode");
+        assert_eq!(parsed[0].1.as_str(), Some("plan"));
+    }
+
+    #[test]
     fn parses_array() {
         let v = parse_toml_value("[1, 2, 3]").expect("parse");
         let arr = v.as_array().expect("array");

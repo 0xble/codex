@@ -10,6 +10,7 @@ use crate::config::types::McpServerToolConfig;
 use crate::config::types::McpServerTransportConfig;
 use crate::config::types::MemoriesConfig;
 use crate::config::types::MemoriesToml;
+use crate::config::types::ModeKind;
 use crate::config::types::ModelAvailabilityNuxConfig;
 use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
@@ -318,6 +319,7 @@ fn config_toml_deserializes_model_availability_nux() {
             notification_method: NotificationMethod::default(),
             animations: true,
             show_tooltips: true,
+            initial_collaboration_mode: None,
             alternate_screen: AltScreenMode::default(),
             status_line: None,
             terminal_title: None,
@@ -344,6 +346,24 @@ fn runtime_config_defaults_model_availability_nux() {
     assert_eq!(
         cfg.model_availability_nux,
         ModelAvailabilityNuxConfig::default()
+    );
+    assert_eq!(cfg.initial_collaboration_mode, None);
+}
+
+#[test]
+fn config_toml_deserializes_tui_initial_collaboration_mode() {
+    let toml = r#"
+[tui]
+initial_collaboration_mode = "plan"
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for TUI mode");
+
+    assert_eq!(
+        cfg.tui
+            .expect("tui config should deserialize")
+            .initial_collaboration_mode,
+        Some(ModeKind::Plan)
     );
 }
 
@@ -1015,6 +1035,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             notification_method: NotificationMethod::Auto,
             animations: true,
             show_tooltips: true,
+            initial_collaboration_mode: None,
             alternate_screen: AltScreenMode::Auto,
             status_line: None,
             terminal_title: None,
@@ -4556,6 +4577,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             animations: true,
             show_tooltips: true,
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
+            initial_collaboration_mode: None,
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tool_suggest: ToolSuggestConfig::default(),
@@ -4700,6 +4722,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
+        initial_collaboration_mode: None,
         analytics_enabled: Some(true),
         feedback_enabled: true,
         tool_suggest: ToolSuggestConfig::default(),
@@ -4842,6 +4865,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
+        initial_collaboration_mode: None,
         analytics_enabled: Some(false),
         feedback_enabled: true,
         tool_suggest: ToolSuggestConfig::default(),
@@ -4970,6 +4994,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         animations: true,
         show_tooltips: true,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
+        initial_collaboration_mode: None,
         analytics_enabled: Some(true),
         feedback_enabled: true,
         tool_suggest: ToolSuggestConfig::default(),

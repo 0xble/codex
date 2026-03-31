@@ -69,6 +69,7 @@ use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_mcp::mcp::McpConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -333,6 +334,7 @@ pub struct Config {
     pub model_availability_nux: ModelAvailabilityNuxConfig,
 
     /// Start the TUI in the specified collaboration mode (plan/default).
+    pub initial_collaboration_mode: Option<ModeKind>,
 
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///
@@ -2770,6 +2772,7 @@ impl Config {
                 .as_ref()
                 .map(|t| t.model_availability_nux.clone())
                 .unwrap_or_default(),
+            initial_collaboration_mode: cfg.tui.as_ref().and_then(|t| t.initial_collaboration_mode),
             tui_alternate_screen: cfg
                 .tui
                 .as_ref()

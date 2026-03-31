@@ -85,6 +85,10 @@ Plan preset. The string value `none` means "no reasoning" (an explicit Plan
 override), not "inherit the global default". There is currently no separate
 config value for "follow the global default in Plan mode".
 
+To choose the startup collaboration mode for the TUI, set
+`[tui].initial_collaboration_mode` to `plan` or `default`. This only takes
+effect when collaboration modes are enabled.
+
 ## Thread title generation
 
 Codex can auto-generate thread titles with a dedicated model and reasoning
