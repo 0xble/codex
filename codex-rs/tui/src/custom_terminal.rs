@@ -42,8 +42,7 @@ use std::time::Duration;
 #[cfg(unix)]
 use std::time::Instant;
 
-use codex_core::terminal::TerminalTransport;
-use codex_core::terminal::terminal_transport;
+use codex_core::terminal::terminal_capabilities;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
 use crossterm::style::Colors;
@@ -96,10 +95,6 @@ fn display_width(s: &str) -> usize {
         visible.push(ch);
     }
     visible.width()
-}
-
-fn use_mosh_compatibility_mode() -> bool {
-    matches!(terminal_transport(), Some(TerminalTransport::Mosh))
 }
 
 #[derive(Debug, Hash)]
@@ -207,7 +202,7 @@ where
     /// Creates a new [`Terminal`] with the given [`Backend`] and [`TerminalOptions`].
     pub fn with_options(mut backend: B) -> io::Result<Self> {
         let screen_size = backend.size()?;
-        let cursor_pos = if use_mosh_compatibility_mode() {
+        let cursor_pos = if !terminal_capabilities().supports_cursor_position_query {
             Position { x: 0, y: 0 }
         } else {
             initial_cursor_position(&mut backend, screen_size).unwrap_or_else(|err| {

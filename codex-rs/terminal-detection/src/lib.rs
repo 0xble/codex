@@ -74,6 +74,19 @@ pub enum TerminalTransport {
     Mosh,
 }
 
+/// Shared terminal feature gates derived from the detected transport and terminal metadata.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TerminalCapabilities {
+    pub supports_alternate_scroll: bool,
+    pub supports_bracketed_paste: bool,
+    pub supports_focus_change: bool,
+    pub supports_keyboard_enhancement: bool,
+    pub supports_cursor_position_query: bool,
+    pub supports_default_color_query: bool,
+    pub supports_synchronized_updates: bool,
+    pub supports_terminal_title: bool,
+}
+
 /// tmux client terminal identification captured via `tmux display-message`.
 ///
 /// `termtype` corresponds to `#{client_termtype}` and typically reflects the
@@ -215,6 +228,7 @@ impl TerminalInfo {
 
 static TERMINAL_INFO: OnceLock<TerminalInfo> = OnceLock::new();
 static TERMINAL_TRANSPORT: OnceLock<Option<TerminalTransport>> = OnceLock::new();
+static TERMINAL_CAPABILITIES: OnceLock<TerminalCapabilities> = OnceLock::new();
 
 /// Environment variable access used by terminal detection.
 ///
@@ -281,6 +295,15 @@ pub fn terminal_info() -> TerminalInfo {
         .clone()
 }
 
+/// Returns the terminal feature gates for the current process.
+pub fn terminal_capabilities() -> TerminalCapabilities {
+    *TERMINAL_CAPABILITIES.get_or_init(|| {
+        let transport = terminal_transport();
+        let info = terminal_info();
+        detect_terminal_capabilities(transport, &info)
+    })
+}
+
 fn detect_terminal_transport_from_env(env: &dyn Environment) -> Option<TerminalTransport> {
     match env
         .var_non_empty("CODEX_TUI_TRANSPORT")
@@ -292,6 +315,48 @@ fn detect_terminal_transport_from_env(env: &dyn Environment) -> Option<TerminalT
         Some("mosh") => Some(TerminalTransport::Mosh),
         _ => None,
     }
+}
+
+fn detect_terminal_capabilities(
+    transport: Option<TerminalTransport>,
+    info: &TerminalInfo,
+) -> TerminalCapabilities {
+    let use_mosh_compatibility_mode = matches!(transport, Some(TerminalTransport::Mosh));
+
+    TerminalCapabilities {
+        supports_alternate_scroll: !use_mosh_compatibility_mode,
+        supports_bracketed_paste: !use_mosh_compatibility_mode,
+        supports_focus_change: !use_mosh_compatibility_mode,
+        supports_keyboard_enhancement: !use_mosh_compatibility_mode
+            && keyboard_enhancement_supported_for_terminal(info.name),
+        supports_cursor_position_query: !use_mosh_compatibility_mode,
+        supports_default_color_query: !use_mosh_compatibility_mode,
+        supports_synchronized_updates: !use_mosh_compatibility_mode
+            && synchronized_updates_supported_for_multiplexer(info.multiplexer.as_ref()),
+        supports_terminal_title: !use_mosh_compatibility_mode,
+    }
+}
+
+fn synchronized_updates_supported_for_multiplexer(multiplexer: Option<&Multiplexer>) -> bool {
+    !matches!(multiplexer, Some(Multiplexer::Tmux { .. }))
+}
+
+fn keyboard_enhancement_supported_for_terminal(name: TerminalName) -> bool {
+    matches!(
+        name,
+        TerminalName::AppleTerminal
+            | TerminalName::Ghostty
+            | TerminalName::Iterm2
+            | TerminalName::WarpTerminal
+            | TerminalName::VsCode
+            | TerminalName::WezTerm
+            | TerminalName::Kitty
+            | TerminalName::Alacritty
+            | TerminalName::Konsole
+            | TerminalName::GnomeTerminal
+            | TerminalName::Vte
+            | TerminalName::WindowsTerminal
+    )
 }
 
 /// Detects structured terminal metadata from an injectable environment.

@@ -20,8 +20,7 @@ use std::io;
 use std::io::IsTerminal;
 use std::io::stdout;
 
-use codex_core::terminal::TerminalTransport;
-use codex_core::terminal::terminal_transport;
+use codex_core::terminal::terminal_capabilities;
 use crossterm::Command;
 use ratatui::crossterm::execute;
 
@@ -32,9 +31,6 @@ use ratatui::crossterm::execute;
 /// readable in tab bars and window managers.
 const MAX_TERMINAL_TITLE_CHARS: usize = 240;
 
-fn use_mosh_compatibility_mode() -> bool {
-    matches!(terminal_transport(), Some(TerminalTransport::Mosh))
-}
 /// Outcome of a [`set_terminal_title`] call.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum SetTerminalTitleResult {
@@ -59,7 +55,7 @@ pub(crate) enum SetTerminalTitleResult {
 /// to single spaces, drops disallowed codepoints, and bounds the result to
 /// [`MAX_TERMINAL_TITLE_CHARS`] visible characters before writing OSC 0.
 pub(crate) fn set_terminal_title(title: &str) -> io::Result<SetTerminalTitleResult> {
-    if use_mosh_compatibility_mode() {
+    if !terminal_capabilities().supports_terminal_title {
         return Ok(SetTerminalTitleResult::Applied);
     }
     if !stdout().is_terminal() {
@@ -80,7 +76,7 @@ pub(crate) fn set_terminal_title(title: &str) -> io::Result<SetTerminalTitleResu
 /// This clears the visible title; it does not restore whatever title the shell
 /// or a previous program may have set before Codex started managing the title.
 pub(crate) fn clear_terminal_title() -> io::Result<()> {
-    if use_mosh_compatibility_mode() {
+    if !terminal_capabilities().supports_terminal_title {
         return Ok(());
     }
     if !stdout().is_terminal() {

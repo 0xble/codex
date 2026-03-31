@@ -7,8 +7,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU16;
 use std::sync::atomic::Ordering;
 
-use codex_core::terminal::TerminalTransport;
-use codex_core::terminal::terminal_transport;
+use codex_core::terminal::terminal_capabilities;
 use crossterm::cursor::MoveTo;
 use crossterm::cursor::Show;
 use crossterm::event::KeyCode;
@@ -25,10 +24,6 @@ use super::EnableAlternateScroll;
 use super::Terminal;
 
 pub const SUSPEND_KEY: key_hint::KeyBinding = key_hint::ctrl(KeyCode::Char('z'));
-
-fn use_mosh_compatibility_mode() -> bool {
-    matches!(terminal_transport(), Some(TerminalTransport::Mosh))
-}
 
 /// Coordinates suspend/resume handling so the TUI can restore terminal context after SIGTSTP.
 ///
@@ -70,7 +65,9 @@ impl SuspendContext {
     pub(crate) fn suspend(&self, alt_screen_active: &Arc<AtomicBool>) -> Result<()> {
         if alt_screen_active.load(Ordering::Relaxed) {
             // Leave alt-screen so the terminal returns to the normal buffer while suspended; also turn off alt-scroll.
-            let _ = execute!(stdout(), DisableAlternateScroll);
+            if terminal_capabilities().supports_alternate_scroll {
+                let _ = execute!(stdout(), DisableAlternateScroll);
+            }
             let _ = execute!(stdout(), LeaveAlternateScreen);
             self.set_resume_action(ResumeAction::RestoreAlt);
         } else {
@@ -93,7 +90,7 @@ impl SuspendContext {
         let action = self.take_resume_action()?;
         match action {
             ResumeAction::RealignInline => {
-                let cursor_pos = if use_mosh_compatibility_mode() {
+                let cursor_pos = if !terminal_capabilities().supports_cursor_position_query {
                     terminal.last_known_cursor_pos
                 } else {
                     terminal
@@ -105,7 +102,7 @@ impl SuspendContext {
             }
             ResumeAction::RestoreAlt => {
                 if let Some(saved) = alt_saved_viewport.as_mut() {
-                    if use_mosh_compatibility_mode() {
+                    if !terminal_capabilities().supports_cursor_position_query {
                         saved.y = terminal.last_known_cursor_pos.y;
                     } else if let Ok(Position { y, .. }) = terminal.get_cursor_position() {
                         saved.y = y;
@@ -173,7 +170,9 @@ impl PreparedResumeAction {
             PreparedResumeAction::RestoreAltScreen => {
                 execute!(terminal.backend_mut(), EnterAlternateScreen)?;
                 // Enable "alternate scroll" so terminals may translate wheel to arrows
-                execute!(terminal.backend_mut(), EnableAlternateScroll)?;
+                if terminal_capabilities().supports_alternate_scroll {
+                    execute!(terminal.backend_mut(), EnableAlternateScroll)?;
+                }
                 if let Ok(size) = terminal.size() {
                     terminal.set_viewport_area(Rect::new(0, 0, size.width, size.height));
                     terminal.clear()?;

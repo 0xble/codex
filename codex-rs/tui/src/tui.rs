@@ -24,8 +24,7 @@ use std::time::Duration;
 #[cfg(unix)]
 use std::time::Instant;
 
-use codex_core::terminal::TerminalTransport;
-use codex_core::terminal::terminal_transport;
+use codex_core::terminal::terminal_capabilities;
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::DisableBracketedPaste;
@@ -59,9 +58,8 @@ use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
 use codex_core::config::types::NotificationMethod;
+#[cfg(test)]
 use codex_core::terminal::Multiplexer;
-use codex_core::terminal::TerminalName;
-use codex_core::terminal::terminal_info;
 
 mod event_stream;
 mod frame_rate_limiter;
@@ -207,7 +205,8 @@ fn parse_terminal_title_response(response: &[u8]) -> Option<String> {
 
 #[cfg(unix)]
 fn query_preexisting_terminal_title(transport: Option<TerminalTitleTransport>) -> Option<String> {
-    if !matches!(transport, Some(TerminalTitleTransport::Direct))
+    if !terminal_capabilities().supports_terminal_title
+        || !matches!(transport, Some(TerminalTitleTransport::Direct))
         || !stdin().is_terminal()
         || !stdout().is_terminal()
     {
@@ -281,7 +280,11 @@ fn terminal_title_transport_for_env(
     term: &str,
     has_tmux: bool,
     has_sty: bool,
+    supports_terminal_title: bool,
 ) -> Option<TerminalTitleTransport> {
+    if !supports_terminal_title {
+        return None;
+    }
     if has_tmux {
         return Some(TerminalTitleTransport::TmuxPassthrough);
     }
@@ -292,11 +295,13 @@ fn terminal_title_transport_for_env(
 }
 
 fn terminal_title_transport() -> Option<TerminalTitleTransport> {
+    let capabilities = terminal_capabilities();
     let term = std::env::var("TERM").unwrap_or_default();
     terminal_title_transport_for_env(
         &term,
         std::env::var_os("TMUX").is_some(),
         std::env::var_os("STY").is_some(),
+        capabilities.supports_terminal_title,
     )
 }
 
@@ -309,51 +314,31 @@ fn terminal_title_disabled(value: Option<&str>) -> bool {
 }
 
 fn terminal_title_enabled() -> bool {
-    !terminal_title_disabled(std::env::var(TERMINAL_TITLE_DISABLE_ENV).ok().as_deref())
+    terminal_title_enabled_for_env(
+        std::env::var(TERMINAL_TITLE_DISABLE_ENV).ok().as_deref(),
+        terminal_capabilities().supports_terminal_title,
+    )
 }
 
+fn terminal_title_enabled_for_env(disabled: Option<&str>, supports_terminal_title: bool) -> bool {
+    supports_terminal_title && !terminal_title_disabled(disabled)
+}
+
+#[cfg(test)]
 fn synchronized_updates_enabled_for_multiplexer(multiplexer: Option<&Multiplexer>) -> bool {
-    !use_mosh_compatibility_mode() && !matches!(multiplexer, Some(Multiplexer::Tmux { .. }))
+    !matches!(multiplexer, Some(Multiplexer::Tmux { .. }))
 }
 
 fn synchronized_updates_enabled() -> bool {
-    let terminal_info = terminal_info();
-    synchronized_updates_enabled_for_multiplexer(terminal_info.multiplexer.as_ref())
-}
-
-fn startup_keyboard_enhancement_supported() -> bool {
-    startup_keyboard_enhancement_supported_for_terminal(terminal_info().name)
-}
-
-fn startup_keyboard_enhancement_supported_for_terminal(name: TerminalName) -> bool {
-    match name {
-        TerminalName::AppleTerminal
-        | TerminalName::Ghostty
-        | TerminalName::Iterm2
-        | TerminalName::WarpTerminal
-        | TerminalName::VsCode
-        | TerminalName::WezTerm
-        | TerminalName::Kitty
-        | TerminalName::Alacritty
-        | TerminalName::Konsole
-        | TerminalName::GnomeTerminal
-        | TerminalName::Vte
-        | TerminalName::WindowsTerminal => true,
-        TerminalName::Dumb | TerminalName::Unknown => false,
-    }
-}
-
-fn use_mosh_compatibility_mode() -> bool {
-    matches!(terminal_transport(), Some(TerminalTransport::Mosh))
+    terminal_capabilities().supports_synchronized_updates
 }
 
 pub fn set_modes() -> Result<()> {
     enable_raw_mode()?;
-    if use_mosh_compatibility_mode() {
-        return Ok(());
+    let capabilities = terminal_capabilities();
+    if capabilities.supports_bracketed_paste {
+        execute!(stdout(), EnableBracketedPaste)?;
     }
-
-    execute!(stdout(), EnableBracketedPaste)?;
 
     // Enable keyboard enhancement flags so modifiers for keys like Enter are disambiguated.
     // chat_composer.rs is using a keyboard event listener to enter for any modified keys
@@ -361,16 +346,20 @@ pub fn set_modes() -> Result<()> {
     // Some terminals (notably legacy Windows consoles) do not support
     // keyboard enhancement flags. Attempt to enable them, but continue
     // gracefully if unsupported.
-    let _ = execute!(
-        stdout(),
-        PushKeyboardEnhancementFlags(
-            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-        )
-    );
+    if capabilities.supports_keyboard_enhancement {
+        let _ = execute!(
+            stdout(),
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+            )
+        );
+    }
 
-    let _ = execute!(stdout(), EnableFocusChange);
+    if capabilities.supports_focus_change {
+        let _ = execute!(stdout(), EnableFocusChange);
+    }
     Ok(())
 }
 
@@ -417,10 +406,15 @@ impl Command for DisableAlternateScroll {
 }
 
 fn restore_common(should_disable_raw_mode: bool) -> Result<()> {
-    if !use_mosh_compatibility_mode() {
+    let capabilities = terminal_capabilities();
+    if capabilities.supports_bracketed_paste {
         execute!(stdout(), DisableBracketedPaste)?;
+    }
+    if capabilities.supports_keyboard_enhancement {
         // Pop may fail on platforms that didn't support the push; ignore errors.
         let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
+    }
+    if capabilities.supports_focus_change {
         let _ = execute!(stdout(), DisableFocusChange);
     }
     if should_disable_raw_mode {
@@ -567,11 +561,7 @@ impl Tui {
         } else {
             None
         };
-        let enhanced_keys_supported = if use_mosh_compatibility_mode() {
-            false
-        } else {
-            startup_keyboard_enhancement_supported()
-        };
+        let enhanced_keys_supported = terminal_capabilities().supports_keyboard_enhancement;
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
 
@@ -886,7 +876,7 @@ impl Tui {
     }
 
     fn pending_viewport_area(&mut self) -> Result<Option<Rect>> {
-        if use_mosh_compatibility_mode() {
+        if !terminal_capabilities().supports_cursor_position_query {
             return Ok(None);
         }
         let terminal = &mut self.terminal;
@@ -920,14 +910,13 @@ mod tests {
     #[cfg(unix)]
     use super::parse_terminal_title_response;
     use super::restore_saved_terminal_title;
-    use super::startup_keyboard_enhancement_supported_for_terminal;
     use super::synchronized_updates_enabled_for_multiplexer;
     use super::terminal_title_disabled;
+    use super::terminal_title_enabled_for_env;
     use super::terminal_title_restore_supported;
     use super::terminal_title_transport_for_env;
     use super::write_terminal_title;
     use codex_core::terminal::Multiplexer;
-    use codex_core::terminal::TerminalName;
     use pretty_assertions::assert_eq;
     use std::sync::atomic::Ordering;
 
@@ -1064,23 +1053,23 @@ mod tests {
     #[test]
     fn terminal_title_transport_uses_tmux_passthrough_in_tmux() {
         assert_eq!(
-            terminal_title_transport_for_env("xterm-256color", true, false),
+            terminal_title_transport_for_env("xterm-256color", true, false, true),
             Some(TerminalTitleTransport::TmuxPassthrough)
         );
         assert_eq!(
-            terminal_title_transport_for_env("tmux-256color", false, false),
+            terminal_title_transport_for_env("tmux-256color", false, false, true),
             None
         );
         assert_eq!(
-            terminal_title_transport_for_env("screen-256color", false, false),
+            terminal_title_transport_for_env("screen-256color", false, false, true),
             None
         );
         assert_eq!(
-            terminal_title_transport_for_env("xterm-256color", false, true),
+            terminal_title_transport_for_env("xterm-256color", false, true, true),
             None
         );
         assert_eq!(
-            terminal_title_transport_for_env("xterm-256color", false, false),
+            terminal_title_transport_for_env("xterm-256color", false, false, true),
             Some(TerminalTitleTransport::Direct)
         );
     }
@@ -1099,25 +1088,17 @@ mod tests {
     #[test]
     fn direct_terminal_title_transport_remains_supported() {
         assert_eq!(
-            terminal_title_transport_for_env("xterm-256color", false, false),
+            terminal_title_transport_for_env("xterm-256color", false, false, true),
             Some(TerminalTitleTransport::Direct)
         );
     }
 
     #[test]
-    fn startup_keyboard_enhancement_support_uses_terminal_heuristics() {
-        assert!(startup_keyboard_enhancement_supported_for_terminal(
-            TerminalName::Ghostty
-        ));
-        assert!(startup_keyboard_enhancement_supported_for_terminal(
-            TerminalName::WezTerm
-        ));
-        assert!(!startup_keyboard_enhancement_supported_for_terminal(
-            TerminalName::Unknown
-        ));
-        assert!(!startup_keyboard_enhancement_supported_for_terminal(
-            TerminalName::Dumb
-        ));
+    fn terminal_title_transport_is_disabled_when_capabilities_disable_titles() {
+        assert_eq!(
+            terminal_title_transport_for_env("xterm-256color", false, false, false),
+            None
+        );
     }
 
     #[test]
@@ -1128,6 +1109,13 @@ mod tests {
         assert!(!terminal_title_disabled(Some("True")));
         assert!(!terminal_title_disabled(Some("0")));
         assert!(!terminal_title_disabled(None));
+    }
+
+    #[test]
+    fn terminal_title_enablement_requires_capability_support() {
+        assert!(!terminal_title_enabled_for_env(None, false));
+        assert!(!terminal_title_enabled_for_env(Some("true"), true));
+        assert!(terminal_title_enabled_for_env(None, true));
     }
 
     #[test]
