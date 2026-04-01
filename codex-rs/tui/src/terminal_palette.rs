@@ -1,5 +1,4 @@
 use crate::color::perceptual_distance;
-use codex_core::terminal::terminal_capabilities;
 use ratatui::style::Color;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -56,9 +55,6 @@ pub fn best_color(target: (u8, u8, u8)) -> Color {
 }
 
 pub fn requery_default_colors() {
-    if !terminal_capabilities().supports_default_color_query {
-        return;
-    }
     imp::requery_default_colors();
     bump_palette_version();
 }
@@ -70,9 +66,6 @@ pub struct DefaultColors {
 }
 
 pub fn default_colors() -> Option<DefaultColors> {
-    if !terminal_capabilities().supports_default_color_query {
-        return None;
-    }
     imp::default_colors()
 }
 

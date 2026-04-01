@@ -42,7 +42,8 @@ use std::time::Duration;
 #[cfg(unix)]
 use std::time::Instant;
 
-use codex_core::terminal::terminal_capabilities;
+use codex_core::terminal::TerminalTransport;
+use codex_core::terminal::terminal_transport;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
 use crossterm::style::Colors;
@@ -202,21 +203,15 @@ where
     /// Creates a new [`Terminal`] with the given [`Backend`] and [`TerminalOptions`].
     pub fn with_options(mut backend: B) -> io::Result<Self> {
         let screen_size = backend.size()?;
-        let cursor_pos = if !terminal_capabilities().supports_cursor_position_query {
-            Position { x: 0, y: 0 }
-        } else {
-            initial_cursor_position(&mut backend, screen_size).unwrap_or_else(|err| {
-                // Some PTYs do not answer CPR (`ESC[6n`); continue with a safe default instead
-                // of failing TUI startup.
-                tracing::warn!(
-                    "failed to read initial cursor position; defaulting to origin: {err}"
-                );
-                Position {
-                    x: 0,
-                    y: screen_size.height.saturating_sub(1),
-                }
-            })
-        };
+        let cursor_pos = initial_cursor_position(&mut backend, screen_size).unwrap_or_else(|err| {
+            // Some PTYs do not answer CPR (`ESC[6n`); continue with a safe default instead
+            // of failing TUI startup.
+            tracing::warn!("failed to read initial cursor position; defaulting to origin: {err}");
+            Position {
+                x: 0,
+                y: screen_size.height.saturating_sub(1),
+            }
+        });
         Ok(Self {
             backend,
             buffers: [Buffer::empty(Rect::ZERO), Buffer::empty(Rect::ZERO)],
@@ -704,6 +699,17 @@ fn draw<I>(writer: &mut impl Write, commands: I) -> io::Result<()>
 where
     I: Iterator<Item = DrawCommand>,
 {
+    draw_with_transport(writer, commands, terminal_transport())
+}
+
+fn draw_with_transport<I>(
+    writer: &mut impl Write,
+    commands: I,
+    transport: Option<TerminalTransport>,
+) -> io::Result<()>
+where
+    I: Iterator<Item = DrawCommand>,
+{
     let mut fg = Color::Reset;
     let mut bg = Color::Reset;
     let mut modifier = Modifier::empty();
@@ -720,21 +726,22 @@ where
         last_pos = Some(Position { x, y });
         match command {
             DrawCommand::Put { cell, .. } => {
-                if cell.modifier != modifier {
+                let style = rendered_cell_style(&cell, transport);
+                if style.modifier != modifier {
                     let diff = ModifierDiff {
                         from: modifier,
-                        to: cell.modifier,
+                        to: style.modifier,
                     };
                     diff.queue(writer)?;
-                    modifier = cell.modifier;
+                    modifier = style.modifier;
                 }
-                if cell.fg != fg || cell.bg != bg {
+                if style.fg != fg || style.bg != bg {
                     queue!(
                         writer,
-                        SetColors(Colors::new(cell.fg.into(), cell.bg.into()))
+                        SetColors(Colors::new(style.fg.into(), style.bg.into()))
                     )?;
-                    fg = cell.fg;
-                    bg = cell.bg;
+                    fg = style.fg;
+                    bg = style.bg;
                 }
 
                 queue!(writer, Print(cell.symbol()))?;
@@ -757,6 +764,29 @@ where
     )?;
 
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RenderedCellStyle {
+    fg: Color,
+    bg: Color,
+    modifier: Modifier,
+}
+
+fn rendered_cell_style(cell: &Cell, transport: Option<TerminalTransport>) -> RenderedCellStyle {
+    let mut fg = cell.fg;
+    let bg = cell.bg;
+    let mut modifier = cell.modifier;
+
+    if matches!(transport, Some(TerminalTransport::Mosh))
+        && fg == Color::Reset
+        && modifier.contains(Modifier::DIM)
+    {
+        fg = Color::DarkGray;
+        modifier.remove(Modifier::DIM);
+    }
+
+    RenderedCellStyle { fg, bg, modifier }
 }
 
 /// The `ModifierDiff` struct is used to calculate the difference between two `Modifier`
@@ -877,6 +907,50 @@ mod tests {
                 .any(|command| matches!(command, DrawCommand::ClearToEnd { x: 2, y: 0, .. })),
             "expected clear-to-end to start after the remaining wide char; commands: {commands:?}"
         );
+    }
+
+    #[test]
+    fn dim_text_falls_back_to_muted_color_under_mosh() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 1, 1));
+        buffer.set_string(0, 0, "x", Style::default().add_modifier(Modifier::DIM));
+        let cell = buffer.cell((0, 0)).expect("cell should exist");
+
+        let style = rendered_cell_style(cell, Some(TerminalTransport::Mosh));
+
+        assert_eq!(style.fg, Color::DarkGray);
+        assert_eq!(style.bg, Color::Reset);
+        assert_eq!(style.modifier, Modifier::empty());
+    }
+
+    #[test]
+    fn dim_text_keeps_original_style_without_mosh() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 1, 1));
+        buffer.set_string(0, 0, "x", Style::default().add_modifier(Modifier::DIM));
+        let cell = buffer.cell((0, 0)).expect("cell should exist");
+
+        let style = rendered_cell_style(cell, None);
+
+        assert_eq!(style.fg, Color::Reset);
+        assert_eq!(style.bg, Color::Reset);
+        assert!(style.modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn explicit_foreground_dim_text_is_not_recolored_under_mosh() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 1, 1));
+        buffer.set_string(
+            0,
+            0,
+            "x",
+            Style::default().fg(Color::Blue).add_modifier(Modifier::DIM),
+        );
+        let cell = buffer.cell((0, 0)).expect("cell should exist");
+
+        let style = rendered_cell_style(cell, Some(TerminalTransport::Mosh));
+
+        assert_eq!(style.fg, Color::Blue);
+        assert_eq!(style.bg, Color::Reset);
+        assert!(style.modifier.contains(Modifier::DIM));
     }
 
     #[test]

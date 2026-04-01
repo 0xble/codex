@@ -3,7 +3,6 @@
 //! Keeping this logic in a focused submodule makes the additive title/status
 //! behavior easier to review without paging through the rest of `chatwidget.rs`.
 
-use codex_core::terminal::terminal_capabilities;
 use super::*;
 
 /// Items shown in the terminal title when the user has not configured a
@@ -180,10 +179,6 @@ impl ChatWidget {
     /// When the `spinner` item is present in an animated running state, this also
     /// schedules the next frame so the spinner keeps advancing.
     fn refresh_terminal_title_from_selections(&mut self, selections: &StatusSurfaceSelections) {
-        if !terminal_capabilities().supports_terminal_title {
-            self.last_terminal_title = None;
-            return;
-        }
         if selections.terminal_title_items.is_empty() {
             if let Err(err) = self.clear_managed_terminal_title() {
                 tracing::debug!(error = %err, "failed to clear terminal title");
@@ -603,9 +598,6 @@ impl ChatWidget {
     }
 
     pub(super) fn should_animate_terminal_title_spinner(&self) -> bool {
-        if !terminal_capabilities().supports_terminal_title {
-            return false;
-        }
         self.config.animations
             && self.terminal_title_uses_spinner()
             && self.terminal_title_has_active_progress()
@@ -615,9 +607,6 @@ impl ChatWidget {
         &self,
         selections: &StatusSurfaceSelections,
     ) -> bool {
-        if !terminal_capabilities().supports_terminal_title {
-            return false;
-        }
         self.config.animations
             && selections
                 .terminal_title_items
