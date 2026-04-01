@@ -1364,6 +1364,11 @@ impl TextArea {
         lines: &[Range<usize>],
         range: std::ops::Range<usize>,
     ) {
+        let clear_line = " ".repeat(area.width as usize);
+        for row in 0..area.height {
+            buf.set_string(area.x, area.y + row, &clear_line, Style::default());
+        }
+
         for (row, idx) in range.enumerate() {
             let r = &lines[idx];
             let y = area.y + row as u16;
@@ -1395,6 +1400,11 @@ impl TextArea {
         range: std::ops::Range<usize>,
         mask_char: char,
     ) {
+        let clear_line = " ".repeat(area.width as usize);
+        for row in 0..area.height {
+            buf.set_string(area.x, area.y + row, &clear_line, Style::default());
+        }
+
         for (row, idx) in range.enumerate() {
             let r = &lines[idx];
             let y = area.y + row as u16;
@@ -2167,6 +2177,28 @@ mod tests {
         ratatui::widgets::StatefulWidgetRef::render_ref(&(&t), area, &mut buf, &mut state);
         let (x1, y1) = t.cursor_pos_with_state(area, state).unwrap();
         assert_eq!((x1, y1), (2, 1));
+    }
+
+    fn row_to_string(buf: &Buffer, area: Rect, row: u16) -> String {
+        (0..area.width)
+            .map(|x| buf[(area.x + x, area.y + row)].symbol().chars().next().unwrap_or(' '))
+            .collect()
+    }
+
+    #[test]
+    fn render_clears_stale_cells_when_text_gets_shorter() {
+        let area = Rect::new(0, 0, 40, 1);
+        let mut buf = Buffer::empty(area);
+        let mut state = TextAreaState::default();
+
+        let long = ta_with("Run /review on my current changes");
+        ratatui::widgets::StatefulWidgetRef::render_ref(&(&long), area, &mut buf, &mut state);
+
+        let short = ta_with("asdfasdfsdafsadf");
+        ratatui::widgets::StatefulWidgetRef::render_ref(&(&short), area, &mut buf, &mut state);
+
+        let expected = format!("{:<width$}", "asdfasdfsdafsadf", width = area.width as usize);
+        assert_eq!(row_to_string(&buf, area, 0), expected);
     }
 
     #[test]
