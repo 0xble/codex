@@ -5,13 +5,17 @@ pub use codex_rollout::RolloutRecorder;
 pub use codex_rollout::RolloutRecorderParams;
 pub use codex_rollout::SESSIONS_SUBDIR;
 pub use codex_rollout::SessionMeta;
+pub use codex_rollout::ThreadNameSource;
+pub use codex_rollout::ThreadTitleState;
 pub use codex_rollout::append_thread_name;
+pub use codex_rollout::append_thread_name_with_source;
 pub use codex_rollout::find_archived_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]
 pub use codex_rollout::find_conversation_path_by_id_str;
 pub use codex_rollout::find_thread_name_by_id;
 pub use codex_rollout::find_thread_path_by_id_str;
 pub use codex_rollout::find_thread_path_by_name_str;
+pub use codex_rollout::find_thread_title_state_by_id;
 pub use codex_rollout::rollout_date_parts;
 
 impl codex_rollout::RolloutConfigView for Config {

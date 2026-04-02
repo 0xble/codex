@@ -65,6 +65,16 @@ pub(super) struct CachedProjectRootName {
 }
 
 impl ChatWidget {
+    pub(super) fn status_line_account_label_for_codex_home(
+        codex_home: Option<&Path>,
+    ) -> Option<String> {
+        crate::status_line_account::label_for_codex_home(codex_home)
+    }
+
+    pub(super) fn status_line_account_label(&self) -> Option<String> {
+        Self::status_line_account_label_for_codex_home(Some(self.config.codex_home.as_path()))
+    }
+
     fn status_surface_selections(&self) -> StatusSurfaceSelections {
         let (status_line_items, invalid_status_line_items) = self.status_line_items_with_invalids();
         let (terminal_title_items, invalid_terminal_title_items) =
@@ -433,6 +443,7 @@ impl ChatWidget {
                 };
                 Some(format!("{} {label}{fast_label}", self.model_display_name()))
             }
+            StatusLineItem::Account => self.status_line_account_label(),
             StatusLineItem::CurrentDir => {
                 Some(format_directory_display(
                     self.status_line_cwd(),

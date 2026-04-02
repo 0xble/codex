@@ -75,6 +75,10 @@ pub struct Cli {
     #[arg(long = "ephemeral", global = true, default_value_t = false)]
     pub ephemeral: bool,
 
+    /// Set an explicit session id for a fresh session.
+    #[arg(long = "session-id", global = true)]
+    pub session_id: Option<String>,
+
     /// Path to a JSON Schema file describing the model's final response shape.
     #[arg(long = "output-schema", value_name = "FILE")]
     pub output_schema: Option<PathBuf>,

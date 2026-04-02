@@ -82,9 +82,6 @@ use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
-use codex_core::AuthManager;
-use codex_core::CodexAuth;
-use codex_core::ThreadManager;
 use codex_core::ThreadTitleState;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -94,11 +91,9 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::ApprovalsReviewer;
 use codex_core::config::types::ModelAvailabilityNuxConfig;
 use codex_core::config_loader::ConfigLayerStackOrdering;
+use codex_core::find_thread_title_state_by_id;
 use codex_core::message_history;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use codex_core::features::Feature;
-use codex_core::find_thread_title_state_by_id;
-use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 #[cfg(target_os = "windows")]
@@ -1062,7 +1057,7 @@ async fn update_terminal_title(tui: &mut tui::Tui, app: &mut App) -> Result<()> 
         persisted_titles.latest_title,
         app.chat_widget.terminal_title_focus(),
         task_running,
-        app.chat_widget.terminal_title_turn_complete(),
+        /*turn_complete*/ false,
         animations_enabled,
         if animations_enabled {
             title_animation_tick()
@@ -3909,7 +3904,6 @@ impl App {
             pending_update_action: None,
             persisted_thread_titles: PersistedThreadTitles::default(),
             persisted_thread_titles_thread_id: None,
-            suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
@@ -7882,7 +7876,7 @@ mod tests {
                 .await
                 .expect("embedded app server");
         let started = app_server
-            .start_thread(app.chat_widget.config_ref())
+            .start_thread(app.chat_widget.config_ref(), None)
             .await?;
         let thread_id = started.session.thread_id;
         app.thread_event_channels
@@ -7910,7 +7904,7 @@ mod tests {
                 .await
                 .expect("embedded app server");
         let started = app_server
-            .start_thread(app.chat_widget.config_ref())
+            .start_thread(app.chat_widget.config_ref(), None)
             .await?;
         let thread_id = started.session.thread_id;
         app.agent_navigation.upsert(
@@ -7943,7 +7937,7 @@ mod tests {
                 .expect("embedded app server");
         let mut ephemeral_config = app.chat_widget.config_ref().clone();
         ephemeral_config.ephemeral = true;
-        let started = app_server.start_thread(&ephemeral_config).await?;
+        let started = app_server.start_thread(&ephemeral_config, None).await?;
         let thread_id = started.session.thread_id;
         app.agent_navigation.upsert(
             thread_id,
@@ -9371,7 +9365,6 @@ guardian_approval = true
             pending_update_action: None,
             persisted_thread_titles: PersistedThreadTitles::default(),
             persisted_thread_titles_thread_id: None,
-            suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
@@ -9428,7 +9421,6 @@ guardian_approval = true
                 pending_update_action: None,
                 persisted_thread_titles: PersistedThreadTitles::default(),
                 persisted_thread_titles_thread_id: None,
-                suppress_shutdown_complete: false,
                 pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),
                 thread_event_channels: HashMap::new(),

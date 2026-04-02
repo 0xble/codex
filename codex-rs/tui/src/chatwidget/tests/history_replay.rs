@@ -459,7 +459,6 @@ async fn thread_snapshot_replay_preserves_agent_message_during_review_mode() {
         id: "review-start".into(),
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
-            pathspecs: Vec::new(),
             user_facing_hint: None,
         }),
     });

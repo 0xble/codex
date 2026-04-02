@@ -109,7 +109,6 @@ async fn entered_review_mode_uses_request_hint() {
             target: ReviewTarget::BaseBranch {
                 branch: "feature".to_string(),
             },
-            pathspecs: Vec::new(),
             user_facing_hint: Some("feature branch".to_string()),
         }),
     });
@@ -129,7 +128,6 @@ async fn entered_review_mode_defaults_to_current_changes_banner() {
         id: "review-start".into(),
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
-            pathspecs: Vec::new(),
             user_facing_hint: None,
         }),
     });
@@ -158,7 +156,6 @@ async fn steer_rejection_queues_review_follow_up_before_existing_queued_messages
             target: ReviewTarget::BaseBranch {
                 branch: "feature".to_string(),
             },
-            pathspecs: Vec::new(),
             user_facing_hint: Some("feature branch".to_string()),
         }),
     });
@@ -274,7 +271,6 @@ async fn live_agent_message_renders_during_review_mode() {
         id: "review-start".into(),
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
-            pathspecs: Vec::new(),
             user_facing_hint: None,
         }),
     });
@@ -318,7 +314,6 @@ async fn review_restores_context_window_indicator() {
             target: ReviewTarget::BaseBranch {
                 branch: "feature".to_string(),
             },
-            pathspecs: Vec::new(),
             user_facing_hint: Some("feature branch".to_string()),
         }),
     });
@@ -1123,7 +1118,6 @@ async fn custom_prompt_submit_sends_review_op() {
                     target: ReviewTarget::Custom {
                         instructions: "please audit dependencies".to_string(),
                     },
-                    pathspecs: Vec::new(),
                     user_facing_hint: None,
                 }
             );
@@ -1370,7 +1364,6 @@ async fn enter_submits_steer_while_review_is_running() {
         id: "review-1".into(),
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
-            pathspecs: Vec::new(),
             user_facing_hint: Some("current changes".to_string()),
         }),
     });
@@ -1419,7 +1412,6 @@ async fn review_queues_user_messages_snapshot() {
         id: "review-1".into(),
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
-            pathspecs: Vec::new(),
             user_facing_hint: Some("current changes".to_string()),
         }),
     });

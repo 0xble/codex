@@ -57,9 +57,9 @@ use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
 use codex_core::config::types::NotificationMethod;
-use codex_core::terminal::Multiplexer;
-use codex_core::terminal::TerminalName;
-use codex_core::terminal::terminal_info;
+use codex_terminal_detection::Multiplexer;
+use codex_terminal_detection::TerminalName;
+use codex_terminal_detection::terminal_info;
 
 mod event_stream;
 mod frame_rate_limiter;
@@ -904,8 +904,8 @@ mod tests {
     use super::terminal_title_restore_supported;
     use super::terminal_title_transport_for_env;
     use super::write_terminal_title;
-    use codex_core::terminal::Multiplexer;
-    use codex_core::terminal::TerminalName;
+    use codex_terminal_detection::Multiplexer;
+    use codex_terminal_detection::TerminalName;
     use pretty_assertions::assert_eq;
     use std::sync::atomic::Ordering;
 

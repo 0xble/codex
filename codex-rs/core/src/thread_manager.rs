@@ -583,6 +583,8 @@ impl ThreadManager {
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
+            /*requested_thread_id*/ None,
+            /*requested_thread_id_lease*/ None,
             /*parent_trace*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
@@ -605,6 +607,8 @@ impl ThreadManager {
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
+            /*requested_thread_id*/ None,
+            /*requested_thread_id_lease*/ None,
             /*parent_trace*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
@@ -963,6 +967,8 @@ impl ThreadManagerState {
             self.skills_manager.as_ref(),
             self.plugins_manager.as_ref(),
         );
+        let session_id_override = requested_thread_id.as_ref().map(ToString::to_string);
+        let _requested_thread_id_lease = requested_thread_id_lease;
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
@@ -980,13 +986,11 @@ impl ThreadManagerState {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
-            requested_thread_id,
-            requested_thread_id_lease,
             inherited_shell_snapshot,
             inherited_exec_policy,
             user_shell_override,
             parent_trace,
-            session_id_override: None,
+            session_id_override,
         })
         .await?;
         self.finalize_thread_spawn(codex, thread_id, watch_registration)
@@ -1007,19 +1011,22 @@ impl ThreadManagerState {
         user_shell_override: Option<crate::shell::Shell>,
         session_id_override: Option<String>,
     ) -> CodexResult<NewThread> {
-        let watch_registration = self
-            .file_watcher
-            .register_config(&config, self.skills_manager.as_ref());
+        let watch_registration = self.skills_watcher.register_config(
+            &config,
+            self.skills_manager.as_ref(),
+            self.plugins_manager.as_ref(),
+        );
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
             config,
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
+            environment_manager: Arc::clone(&self.environment_manager),
             skills_manager: Arc::clone(&self.skills_manager),
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),
-            file_watcher: Arc::clone(&self.file_watcher),
+            skills_watcher: Arc::clone(&self.skills_watcher),
             conversation_history: initial_history,
             session_source: self.session_source.clone(),
             agent_control,

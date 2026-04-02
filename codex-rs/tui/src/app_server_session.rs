@@ -593,14 +593,12 @@ impl AppServerSession {
         review_request: ReviewRequest,
     ) -> Result<ReviewStartResponse> {
         let request_id = self.next_request_id();
-        let ReviewRequest { target, pathspecs, .. } = review_request;
         self.client
             .request_typed(ClientRequest::ReviewStart {
                 request_id,
                 params: ReviewStartParams {
                     thread_id: thread_id.to_string(),
-                    target: review_target_to_app_server(target),
-                    pathspecs,
+                    target: review_target_to_app_server(review_request.target),
                     delivery: Some(ReviewDelivery::Inline),
                 },
             })
@@ -1018,9 +1016,6 @@ fn review_target_to_app_server(
     target: CoreReviewTarget,
 ) -> codex_app_server_protocol::ReviewTarget {
     match target {
-        CoreReviewTarget::StagedChanges => {
-            codex_app_server_protocol::ReviewTarget::StagedChanges
-        }
         CoreReviewTarget::UncommittedChanges => {
             codex_app_server_protocol::ReviewTarget::UncommittedChanges
         }
@@ -1149,7 +1144,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let config = build_config(&temp_dir).await;
 
-        let params = thread_start_params_from_config(&config, ThreadParamsMode::Embedded);
+        let params = thread_start_params_from_config(&config, ThreadParamsMode::Embedded, None);
 
         assert_eq!(params.cwd, Some(config.cwd.to_string_lossy().to_string()));
         assert_eq!(params.model_provider, Some(config.model_provider_id));
@@ -1161,7 +1156,7 @@ mod tests {
         let config = build_config(&temp_dir).await;
         let thread_id = ThreadId::new();
 
-        let start = thread_start_params_from_config(&config, ThreadParamsMode::Remote);
+        let start = thread_start_params_from_config(&config, ThreadParamsMode::Remote, None);
         let resume =
             thread_resume_params_from_config(config.clone(), thread_id, ThreadParamsMode::Remote);
         let fork = thread_fork_params_from_config(config, thread_id, ThreadParamsMode::Remote);

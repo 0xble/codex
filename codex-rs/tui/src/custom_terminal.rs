@@ -42,8 +42,8 @@ use std::time::Duration;
 #[cfg(unix)]
 use std::time::Instant;
 
-use codex_core::terminal::TerminalTransport;
-use codex_core::terminal::terminal_transport;
+use codex_terminal_detection::TerminalTransport;
+use codex_terminal_detection::terminal_transport;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
 use crossterm::style::Colors;
@@ -525,15 +525,22 @@ const INITIAL_CURSOR_QUERY_TIMEOUT: Duration = Duration::from_millis(75);
 
 #[cfg(unix)]
 fn initial_cursor_position<B: Backend + Write>(
-    _backend: &mut B,
+    backend: &mut B,
     screen_size: Size,
 ) -> io::Result<Position> {
-    match query_cursor_position_with_timeout(INITIAL_CURSOR_QUERY_TIMEOUT) {
-        Ok(position) => Ok(position),
-        Err(_) => Ok(Position {
+    if !stdin().is_terminal() || !stdout().is_terminal() {
+        return backend.get_cursor_position().or(Ok(Position {
             x: 0,
             y: screen_size.height.saturating_sub(1),
-        }),
+        }));
+    }
+
+    match query_cursor_position_with_timeout(INITIAL_CURSOR_QUERY_TIMEOUT) {
+        Ok(position) => Ok(position),
+        Err(_) => backend.get_cursor_position().or(Ok(Position {
+            x: 0,
+            y: screen_size.height.saturating_sub(1),
+        })),
     }
 }
 
