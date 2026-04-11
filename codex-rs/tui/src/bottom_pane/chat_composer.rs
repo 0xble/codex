@@ -5811,6 +5811,29 @@ mod tests {
     }
 
     #[test]
+    fn empty_composer_uses_shaded_background_without_terminal_palette_queries() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        let area = Rect::new(0, 0, 40, 6);
+        let mut buf = Buffer::empty(area);
+        composer.render(area, &mut buf);
+
+        assert!(
+            buf[(0, 1)].style().bg.is_some(),
+            "expected composer row to keep a shaded background when palette queries are unavailable"
+        );
+        insta::assert_snapshot!("empty_with_fallback_background_debug", format!("{buf:?}"));
+    }
+
+    #[test]
     fn image_placeholder_snapshots() {
         snapshot_composer_state(
             "image_placeholder_single",

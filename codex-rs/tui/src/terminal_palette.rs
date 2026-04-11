@@ -4,6 +4,8 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 static DEFAULT_PALETTE_VERSION: AtomicU64 = AtomicU64::new(0);
+const FALLBACK_DARK_TERMINAL_FG_RGB: (u8, u8, u8) = (229, 229, 235);
+const FALLBACK_DARK_TERMINAL_BG_RGB: (u8, u8, u8) = (34, 34, 43);
 
 fn bump_palette_version() {
     DEFAULT_PALETTE_VERSION.fetch_add(1, Ordering::Relaxed);
@@ -59,7 +61,7 @@ pub fn requery_default_colors() {
     bump_palette_version();
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DefaultColors {
     fg: (u8, u8, u8),
     bg: (u8, u8, u8),
@@ -70,11 +72,48 @@ pub fn default_colors() -> Option<DefaultColors> {
 }
 
 pub fn default_fg() -> Option<(u8, u8, u8)> {
-    default_colors().map(|c| c.fg)
+    default_colors()
+        .map(|c| c.fg)
+        .or_else(|| Some(fallback_default_colors().fg))
 }
 
 pub fn default_bg() -> Option<(u8, u8, u8)> {
-    default_colors().map(|c| c.bg)
+    default_colors()
+        .map(|c| c.bg)
+        .or_else(|| Some(fallback_default_colors().bg))
+}
+
+fn fallback_default_colors() -> DefaultColors {
+    let colorfgbg = std::env::var("COLORFGBG").ok();
+    fallback_default_colors_for_env_value(colorfgbg.as_deref())
+}
+
+fn fallback_default_colors_for_env_value(colorfgbg: Option<&str>) -> DefaultColors {
+    let mut rgb_values = colorfgbg
+        .into_iter()
+        .flat_map(|value| value.split(';'))
+        .filter_map(parse_colorfgbg_index)
+        .filter_map(color_code_to_rgb)
+        .rev();
+
+    let bg = rgb_values.next().unwrap_or(FALLBACK_DARK_TERMINAL_BG_RGB);
+    let fg = rgb_values.next().unwrap_or(FALLBACK_DARK_TERMINAL_FG_RGB);
+    DefaultColors { fg, bg }
+}
+
+fn parse_colorfgbg_index(token: &str) -> Option<usize> {
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    trimmed
+        .parse::<usize>()
+        .ok()
+        .filter(|index| *index < XTERM_COLORS.len())
+}
+
+fn color_code_to_rgb(index: usize) -> Option<(u8, u8, u8)> {
+    XTERM_COLORS.get(index).copied()
 }
 
 /// Returns a monotonic counter that increments whenever `requery_default_colors()` runs
@@ -437,3 +476,42 @@ pub const XTERM_COLORS: [(u8, u8, u8); 256] = [
     (228, 228, 228), // 254 Grey89
     (238, 238, 238), // 255 Grey93
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn colorfgbg_fallback_uses_last_two_numeric_entries() {
+        assert_eq!(
+            fallback_default_colors_for_env_value(Some("default;default;15;0")),
+            DefaultColors {
+                fg: XTERM_COLORS[15],
+                bg: XTERM_COLORS[0],
+            }
+        )
+    }
+
+    #[test]
+    fn colorfgbg_fallback_uses_fixed_dark_defaults_when_no_codes_exist() {
+        assert_eq!(
+            fallback_default_colors_for_env_value(Some("default;default")),
+            DefaultColors {
+                fg: FALLBACK_DARK_TERMINAL_FG_RGB,
+                bg: FALLBACK_DARK_TERMINAL_BG_RGB,
+            }
+        )
+    }
+
+    #[test]
+    fn colorfgbg_fallback_uses_dark_default_fg_when_only_bg_exists() {
+        assert_eq!(
+            fallback_default_colors_for_env_value(Some("0")),
+            DefaultColors {
+                fg: FALLBACK_DARK_TERMINAL_FG_RGB,
+                bg: XTERM_COLORS[0],
+            }
+        )
+    }
+}
