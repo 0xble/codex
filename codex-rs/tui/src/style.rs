@@ -47,7 +47,11 @@ pub fn proposed_plan_bg(terminal_bg: (u8, u8, u8)) -> Color {
 }
 
 fn subtle_surface_bg(target: (u8, u8, u8)) -> Color {
-    match stdout_color_level() {
+    subtle_surface_bg_with_level(target, stdout_color_level())
+}
+
+fn subtle_surface_bg_with_level(target: (u8, u8, u8), color_level: StdoutColorLevel) -> Color {
+    match color_level {
         // Some transports and test backends fail capability detection even though RGB colors still
         // render correctly. Prefer a visible shaded surface over silently resetting to the
         // terminal default.
@@ -82,9 +86,6 @@ mod tests {
     }
 
     fn subtle_surface_bg_for(target: (u8, u8, u8), color_level: StdoutColorLevel) -> Color {
-        match color_level {
-            StdoutColorLevel::Unknown => rgb_color(target),
-            _ => best_color(target),
-        }
+        subtle_surface_bg_with_level(target, color_level)
     }
 }
