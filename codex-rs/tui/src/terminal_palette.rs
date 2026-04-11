@@ -1,3 +1,4 @@
+use crate::color::is_light;
 use crate::color::perceptual_distance;
 use ratatui::style::Color;
 use std::sync::atomic::AtomicU64;
@@ -5,7 +6,9 @@ use std::sync::atomic::Ordering;
 
 static DEFAULT_PALETTE_VERSION: AtomicU64 = AtomicU64::new(0);
 const FALLBACK_DARK_TERMINAL_FG_RGB: (u8, u8, u8) = (229, 229, 235);
-const FALLBACK_DARK_TERMINAL_BG_RGB: (u8, u8, u8) = (34, 34, 43);
+const FALLBACK_DARK_TERMINAL_BG_RGB: (u8, u8, u8) = (31, 31, 47);
+const FALLBACK_LIGHT_TERMINAL_FG_RGB: (u8, u8, u8) = (43, 43, 58);
+const FALLBACK_LIGHT_TERMINAL_BG_RGB: (u8, u8, u8) = (250, 250, 250);
 
 fn bump_palette_version() {
     DEFAULT_PALETTE_VERSION.fetch_add(1, Ordering::Relaxed);
@@ -89,16 +92,10 @@ fn fallback_default_colors() -> DefaultColors {
 }
 
 fn fallback_default_colors_for_env_value(colorfgbg: Option<&str>) -> DefaultColors {
-    let mut rgb_values = colorfgbg
-        .into_iter()
-        .flat_map(|value| value.split(';'))
-        .filter_map(parse_colorfgbg_index)
-        .filter_map(color_code_to_rgb)
-        .rev();
-
-    let bg = rgb_values.next().unwrap_or(FALLBACK_DARK_TERMINAL_BG_RGB);
-    let fg = rgb_values.next().unwrap_or(FALLBACK_DARK_TERMINAL_FG_RGB);
-    DefaultColors { fg, bg }
+    match infer_fallback_theme(colorfgbg) {
+        Some(FallbackTheme::Light) => fallback_light_default_colors(),
+        Some(FallbackTheme::Dark) | None => fallback_dark_default_colors(),
+    }
 }
 
 fn parse_colorfgbg_index(token: &str) -> Option<usize> {
@@ -114,6 +111,40 @@ fn parse_colorfgbg_index(token: &str) -> Option<usize> {
 
 fn color_code_to_rgb(index: usize) -> Option<(u8, u8, u8)> {
     XTERM_COLORS.get(index).copied()
+}
+
+fn fallback_dark_default_colors() -> DefaultColors {
+    DefaultColors {
+        fg: FALLBACK_DARK_TERMINAL_FG_RGB,
+        bg: FALLBACK_DARK_TERMINAL_BG_RGB,
+    }
+}
+
+fn fallback_light_default_colors() -> DefaultColors {
+    DefaultColors {
+        fg: FALLBACK_LIGHT_TERMINAL_FG_RGB,
+        bg: FALLBACK_LIGHT_TERMINAL_BG_RGB,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FallbackTheme {
+    Dark,
+    Light,
+}
+
+fn infer_fallback_theme(colorfgbg: Option<&str>) -> Option<FallbackTheme> {
+    let bg = colorfgbg
+        .into_iter()
+        .flat_map(|value| value.split(';'))
+        .filter_map(parse_colorfgbg_index)
+        .filter_map(color_code_to_rgb)
+        .next_back()?;
+    Some(if is_light(bg) {
+        FallbackTheme::Light
+    } else {
+        FallbackTheme::Dark
+    })
 }
 
 /// Returns a monotonic counter that increments whenever `requery_default_colors()` runs
@@ -486,10 +517,7 @@ mod tests {
     fn colorfgbg_fallback_uses_last_two_numeric_entries() {
         assert_eq!(
             fallback_default_colors_for_env_value(Some("default;default;15;0")),
-            DefaultColors {
-                fg: XTERM_COLORS[15],
-                bg: XTERM_COLORS[0],
-            }
+            fallback_dark_default_colors()
         )
     }
 
@@ -497,10 +525,7 @@ mod tests {
     fn colorfgbg_fallback_uses_fixed_dark_defaults_when_no_codes_exist() {
         assert_eq!(
             fallback_default_colors_for_env_value(Some("default;default")),
-            DefaultColors {
-                fg: FALLBACK_DARK_TERMINAL_FG_RGB,
-                bg: FALLBACK_DARK_TERMINAL_BG_RGB,
-            }
+            fallback_dark_default_colors()
         )
     }
 
@@ -508,10 +533,23 @@ mod tests {
     fn colorfgbg_fallback_uses_dark_default_fg_when_only_bg_exists() {
         assert_eq!(
             fallback_default_colors_for_env_value(Some("0")),
-            DefaultColors {
-                fg: FALLBACK_DARK_TERMINAL_FG_RGB,
-                bg: XTERM_COLORS[0],
-            }
+            fallback_dark_default_colors()
+        )
+    }
+
+    #[test]
+    fn colorfgbg_fallback_uses_light_defaults_for_light_background_index() {
+        assert_eq!(
+            fallback_default_colors_for_env_value(Some("0;15")),
+            fallback_light_default_colors()
+        )
+    }
+
+    #[test]
+    fn colorfgbg_fallback_ignores_dark_palette_hue_and_uses_neutral_defaults() {
+        assert_eq!(
+            fallback_default_colors_for_env_value(Some("15;60")),
+            fallback_dark_default_colors()
         )
     }
 }
