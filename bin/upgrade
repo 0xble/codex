@@ -1,10 +1,12 @@
 #!/bin/sh
 set -euo pipefail
 
+REPO_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+CODEX_RS_DIR="$REPO_ROOT/codex-rs"
 INSTALL_DIR="$HOME/.local/opt/codex/local/libexec"
-SRC="$HOME/Repos/codex/codex-rs/target/release/codex"
+SRC="$CODEX_RS_DIR/target/release/codex"
 
-cd "$HOME/Repos/codex/codex-rs"
+cd "$CODEX_RS_DIR"
 cargo build --release
 
 mkdir -p "$INSTALL_DIR"
