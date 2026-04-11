@@ -514,7 +514,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn colorfgbg_fallback_uses_last_two_numeric_entries() {
+    fn colorfgbg_fallback_infers_dark_theme_from_background_entry() {
         assert_eq!(
             fallback_default_colors_for_env_value(Some("default;default;15;0")),
             fallback_dark_default_colors()
