@@ -66,7 +66,9 @@ mod tests {
 
     #[test]
     fn user_message_style_uses_fallback_background_when_default_palette_is_unavailable() {
-        assert_ne!(user_message_style().bg, Some(Color::Reset));
+        let style = user_message_style();
+        assert!(style.bg.is_some());
+        assert_ne!(style.bg, Some(Color::Reset));
     }
 
     #[test]
