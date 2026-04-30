@@ -609,6 +609,10 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
 
+    /// Initial TUI collaboration mode. Defaults to the built-in default mode.
+    #[serde(default)]
+    pub initial_collaboration_mode: Option<ModeKind>,
+
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///
     /// - `auto` (default): Disable alternate screen in Zellij, enable elsewhere.

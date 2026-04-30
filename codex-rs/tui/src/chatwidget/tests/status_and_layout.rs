@@ -163,6 +163,39 @@ async fn helpers_are_available_and_do_not_panic() {
 }
 
 #[tokio::test]
+async fn status_line_account_falls_back_to_auth_account_outside_instance_home() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.status_account_display = Some(crate::status::StatusAccountDisplay::ChatGpt {
+        email: Some("brian@brianle.xyz".to_string()),
+        plan: Some("Plus".to_string()),
+    });
+
+    assert_eq!(
+        chat.status_line_value_for_item(&crate::bottom_pane::StatusLineItem::Account),
+        Some("brian@brianle.xyz".to_string())
+    );
+}
+
+#[tokio::test]
+async fn status_line_account_prefers_instance_slug() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let root = tempdir().expect("tempdir");
+    let instance_home = root.path().join("instances").join("ebjd7");
+    std::fs::create_dir_all(&instance_home).expect("create instance home");
+    chat.config.codex_home =
+        codex_utils_absolute_path::AbsolutePathBuf::try_from(instance_home).expect("absolute path");
+    chat.status_account_display = Some(crate::status::StatusAccountDisplay::ChatGpt {
+        email: Some("brian@brianle.xyz".to_string()),
+        plan: Some("Plus".to_string()),
+    });
+
+    assert_eq!(
+        chat.status_line_value_for_item(&crate::bottom_pane::StatusLineItem::Account),
+        Some("ebjd7".to_string())
+    );
+}
+
+#[tokio::test]
 async fn prefetch_rate_limits_is_gated_on_chatgpt_auth_provider() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

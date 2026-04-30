@@ -1487,8 +1487,31 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
 
 #[tokio::test]
 async fn collaboration_modes_defaults_to_code_on_startup() {
+    let (chat, resolved_model) = chat_with_initial_collaboration_mode(None).await;
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_eq!(chat.current_model(), resolved_model);
+}
+
+#[tokio::test]
+async fn collaboration_modes_can_start_in_plan_mode() {
+    let (chat, resolved_model) = chat_with_initial_collaboration_mode(Some(ModeKind::Plan)).await;
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.current_model(), resolved_model);
+}
+
+#[tokio::test]
+async fn collaboration_modes_falls_back_when_startup_mode_is_not_visible() {
+    let (chat, resolved_model) =
+        chat_with_initial_collaboration_mode(Some(ModeKind::PairProgramming)).await;
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_eq!(chat.current_model(), resolved_model);
+}
+
+async fn chat_with_initial_collaboration_mode(
+    initial_collaboration_mode: Option<ModeKind>,
+) -> (ChatWidget, String) {
     let codex_home = tempdir().expect("tempdir");
-    let cfg = ConfigBuilder::default()
+    let mut cfg = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .cli_overrides(vec![(
             "features.collaboration_modes".to_string(),
@@ -1497,6 +1520,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         .build()
         .await
         .expect("config");
+    cfg.initial_collaboration_mode = initial_collaboration_mode;
     let resolved_model = crate::legacy_core::test_support::get_model_offline(cfg.model.as_deref());
     let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let init = ChatWidgetInit {
@@ -1520,8 +1544,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
     };
 
     let chat = ChatWidget::new_with_app_event(init);
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
-    assert_eq!(chat.current_model(), resolved_model);
+    (chat, resolved_model)
 }
 
 #[tokio::test]

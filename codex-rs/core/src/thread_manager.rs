@@ -219,6 +219,7 @@ pub struct StartThreadOptions {
     pub metrics_service_name: Option<String>,
     pub parent_trace: Option<W3cTraceContext>,
     pub environments: Vec<TurnEnvironmentSelection>,
+    pub session_id_override: Option<String>,
 }
 
 pub(crate) struct ResumeThreadFromRolloutOptions {
@@ -554,6 +555,7 @@ impl ThreadManager {
             metrics_service_name: None,
             parent_trace: None,
             environments,
+            session_id_override: None,
         }))
         .await
     }
@@ -580,6 +582,7 @@ impl ThreadManager {
             options.parent_trace,
             options.environments,
             /*user_shell_override*/ None,
+            options.session_id_override,
         ))
         .await
     }
@@ -629,6 +632,7 @@ impl ThreadManager {
             parent_trace,
             environments,
             /*user_shell_override*/ None,
+            /*session_id_override*/ None,
         ))
         .await
     }
@@ -655,6 +659,7 @@ impl ThreadManager {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ Some(user_shell_override),
+            /*session_id_override*/ None,
         ))
         .await
     }
@@ -684,6 +689,7 @@ impl ThreadManager {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ Some(user_shell_override),
+            /*session_id_override*/ None,
         ))
         .await
     }
@@ -826,6 +832,7 @@ impl ThreadManager {
             parent_trace,
             environments,
             /*user_shell_override*/ None,
+            /*session_id_override*/ None,
         ))
         .await
     }
@@ -944,6 +951,7 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ None,
+            /*session_id_override*/ None,
         ))
         .await
     }
@@ -979,6 +987,7 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ None,
+            /*session_id_override*/ None,
         ))
         .await
     }
@@ -1014,6 +1023,7 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ None,
+            /*session_id_override*/ None,
         ))
         .await
     }
@@ -1033,6 +1043,7 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
+        session_id_override: Option<String>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -1049,6 +1060,7 @@ impl ThreadManagerState {
             parent_trace,
             environments,
             user_shell_override,
+            session_id_override,
         ))
         .await
     }
@@ -1070,6 +1082,7 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
+        session_id_override: Option<String>,
     ) -> CodexResult<NewThread> {
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
         let environment =
@@ -1116,6 +1129,7 @@ impl ThreadManagerState {
             environments,
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store,
+            session_id_override,
         })
         .await?;
         let new_thread = self

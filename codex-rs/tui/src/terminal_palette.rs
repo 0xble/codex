@@ -1,5 +1,12 @@
+use crate::color::is_light;
 use crate::color::perceptual_distance;
+use codex_terminal_detection::terminal_capabilities;
 use ratatui::style::Color;
+
+const FALLBACK_DARK_TERMINAL_FG_RGB: (u8, u8, u8) = (229, 229, 235);
+const FALLBACK_DARK_TERMINAL_BG_RGB: (u8, u8, u8) = (31, 31, 47);
+const FALLBACK_LIGHT_TERMINAL_FG_RGB: (u8, u8, u8) = (43, 43, 58);
+const FALLBACK_LIGHT_TERMINAL_BG_RGB: (u8, u8, u8) = (250, 250, 250);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StdoutColorLevel {
@@ -47,25 +54,96 @@ pub fn best_color(target: (u8, u8, u8)) -> Color {
 }
 
 pub fn requery_default_colors() {
+    if !terminal_capabilities().supports_default_color_query {
+        return;
+    }
     imp::requery_default_colors();
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DefaultColors {
     fg: (u8, u8, u8),
     bg: (u8, u8, u8),
 }
 
 pub fn default_colors() -> Option<DefaultColors> {
+    if !terminal_capabilities().supports_default_color_query {
+        return None;
+    }
     imp::default_colors()
 }
 
 pub fn default_fg() -> Option<(u8, u8, u8)> {
-    default_colors().map(|c| c.fg)
+    default_colors()
+        .map(|c| c.fg)
+        .or_else(|| Some(fallback_default_colors().fg))
 }
 
 pub fn default_bg() -> Option<(u8, u8, u8)> {
-    default_colors().map(|c| c.bg)
+    default_colors()
+        .map(|c| c.bg)
+        .or_else(|| Some(fallback_default_colors().bg))
+}
+
+fn fallback_default_colors() -> DefaultColors {
+    let colorfgbg = std::env::var("COLORFGBG").ok();
+    fallback_default_colors_for_env_value(colorfgbg.as_deref())
+}
+
+fn fallback_default_colors_for_env_value(colorfgbg: Option<&str>) -> DefaultColors {
+    match infer_fallback_theme(colorfgbg) {
+        Some(FallbackTheme::Light) => fallback_light_default_colors(),
+        Some(FallbackTheme::Dark) | None => fallback_dark_default_colors(),
+    }
+}
+
+fn fallback_dark_default_colors() -> DefaultColors {
+    DefaultColors {
+        fg: FALLBACK_DARK_TERMINAL_FG_RGB,
+        bg: FALLBACK_DARK_TERMINAL_BG_RGB,
+    }
+}
+
+fn fallback_light_default_colors() -> DefaultColors {
+    DefaultColors {
+        fg: FALLBACK_LIGHT_TERMINAL_FG_RGB,
+        bg: FALLBACK_LIGHT_TERMINAL_BG_RGB,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FallbackTheme {
+    Dark,
+    Light,
+}
+
+fn infer_fallback_theme(colorfgbg: Option<&str>) -> Option<FallbackTheme> {
+    let bg = colorfgbg
+        .into_iter()
+        .flat_map(|value| value.split(';'))
+        .filter_map(parse_colorfgbg_index)
+        .filter_map(color_code_to_rgb)
+        .next_back()?;
+    Some(if is_light(bg) {
+        FallbackTheme::Light
+    } else {
+        FallbackTheme::Dark
+    })
+}
+
+fn parse_colorfgbg_index(token: &str) -> Option<usize> {
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    trimmed
+        .parse::<usize>()
+        .ok()
+        .filter(|index| *index < XTERM_COLORS.len())
+}
+
+fn color_code_to_rgb(index: usize) -> Option<(u8, u8, u8)> {
+    XTERM_COLORS.get(index).copied()
 }
 
 #[cfg(all(unix, not(test)))]
@@ -420,3 +498,38 @@ pub const XTERM_COLORS: [(u8, u8, u8); 256] = [
     (228, 228, 228), // 254 Grey89
     (238, 238, 238), // 255 Grey93
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn colorfgbg_fallback_uses_dark_defaults_for_dark_background_index() {
+        assert_eq!(
+            fallback_default_colors_for_env_value(Some("default;default;15;0")),
+            fallback_dark_default_colors()
+        )
+    }
+
+    #[test]
+    fn colorfgbg_fallback_uses_fixed_dark_defaults_when_no_codes_exist() {
+        assert_eq!(
+            fallback_default_colors_for_env_value(Some("default;default")),
+            fallback_dark_default_colors()
+        )
+    }
+
+    #[test]
+    fn colorfgbg_fallback_uses_light_defaults_for_light_background_index() {
+        assert_eq!(
+            fallback_default_colors_for_env_value(Some("0;15")),
+            fallback_light_default_colors()
+        )
+    }
+
+    #[test]
+    fn default_bg_has_a_fallback_when_terminal_query_is_unavailable() {
+        assert!(default_bg().is_some());
+    }
+}

@@ -409,6 +409,8 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) environments: Vec<TurnEnvironmentSelection>,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
+    /// Override the generated thread/session ID with a caller-supplied UUID.
+    pub(crate) session_id_override: Option<String>,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -466,6 +468,7 @@ impl Codex {
             environments,
             analytics_events_client,
             thread_store,
+            session_id_override,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -645,6 +648,7 @@ impl Codex {
             analytics_events_client,
             thread_store,
             parent_rollout_thread_trace,
+            session_id_override,
         )
         .await
         .map_err(|e| {
@@ -2644,7 +2648,10 @@ impl Session {
         if turn_context.config.include_skill_instructions {
             let available_skills = build_available_skills(
                 &turn_context.turn_skills.outcome,
-                default_skill_metadata_budget(turn_context.model_info.context_window),
+                default_skill_metadata_budget(
+                    turn_context.model_info.context_window,
+                    turn_context.config.skill_metadata_context_window_percent,
+                ),
                 SkillRenderSideEffects::ThreadStart {
                     session_telemetry: &self.services.session_telemetry,
                 },

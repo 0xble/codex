@@ -2466,6 +2466,7 @@ impl CodexMessageProcessor {
             personality,
             ephemeral,
             session_start_source,
+            session_id_override,
             environments,
             persist_extended_history,
         } = params;
@@ -2538,6 +2539,7 @@ impl CodexMessageProcessor {
                 typesafe_overrides,
                 dynamic_tools,
                 session_start_source,
+                session_id_override,
                 environments,
                 persist_extended_history,
                 service_name,
@@ -2594,6 +2596,7 @@ impl CodexMessageProcessor {
                 metrics_service_name: None,
                 parent_trace: None,
                 environments,
+                session_id_override: None,
             })
             .await
             .map_err(|err| internal_error(format!("failed to import session: {err}")))?;
@@ -2672,6 +2675,7 @@ impl CodexMessageProcessor {
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
+        session_id_override: Option<String>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
         persist_extended_history: bool,
         service_name: Option<String>,
@@ -2801,6 +2805,7 @@ impl CodexMessageProcessor {
                     metrics_service_name: service_name,
                     parent_trace: request_trace,
                     environments,
+                    session_id_override,
                 })
                 .instrument(tracing::info_span!(
                     "app_server.thread_start.create_thread",

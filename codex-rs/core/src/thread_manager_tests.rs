@@ -326,6 +326,7 @@ async fn start_thread_accepts_explicit_environment_when_default_environment_is_d
                 environment_id: "local".to_string(),
                 cwd: config.cwd.clone(),
             }],
+            session_id_override: None,
         })
         .await
         .expect("explicit sticky environment should resolve by id");
@@ -361,6 +362,7 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
             metrics_service_name: None,
             parent_trace: None,
             environments: Vec::new(),
+            session_id_override: None,
         })
         .await
         .expect("internal thread should start");
@@ -414,6 +416,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             metrics_service_name: None,
             parent_trace: None,
             environments: environments.clone(),
+            session_id_override: None,
         })
         .await
         .expect("start source thread");

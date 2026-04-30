@@ -20,6 +20,7 @@ use std::io;
 use std::io::IsTerminal;
 use std::io::stdout;
 
+use codex_terminal_detection::terminal_capabilities;
 use crossterm::Command;
 use ratatui::crossterm::execute;
 
@@ -54,7 +55,7 @@ pub(crate) enum SetTerminalTitleResult {
 /// to single spaces, drops disallowed codepoints, and bounds the result to
 /// [`MAX_TERMINAL_TITLE_CHARS`] visible characters before writing OSC 0.
 pub(crate) fn set_terminal_title(title: &str) -> io::Result<SetTerminalTitleResult> {
-    if !stdout().is_terminal() {
+    if !terminal_capabilities().supports_terminal_title || !stdout().is_terminal() {
         return Ok(SetTerminalTitleResult::Applied);
     }
 
@@ -72,7 +73,7 @@ pub(crate) fn set_terminal_title(title: &str) -> io::Result<SetTerminalTitleResu
 /// This clears the visible title; it does not restore whatever title the shell
 /// or a previous program may have set before Codex started managing the title.
 pub(crate) fn clear_terminal_title() -> io::Result<()> {
-    if !stdout().is_terminal() {
+    if !terminal_capabilities().supports_terminal_title || !stdout().is_terminal() {
         return Ok(());
     }
 

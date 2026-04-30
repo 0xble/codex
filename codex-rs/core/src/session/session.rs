@@ -349,6 +349,7 @@ impl Session {
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
+        session_id_override: Option<String>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -364,7 +365,14 @@ impl Session {
         };
         let conversation_id = match &initial_history {
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
-                ThreadId::default()
+                match session_id_override.as_deref() {
+                    Some(override_value) => {
+                        ThreadId::from_string(override_value).map_err(|err| {
+                            anyhow::anyhow!("invalid session_id_override `{override_value}`: {err}")
+                        })?
+                    }
+                    None => ThreadId::default(),
+                }
             }
             InitialHistory::Resumed(resumed_history) => resumed_history.conversation_id,
         };

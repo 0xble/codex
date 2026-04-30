@@ -38,6 +38,7 @@ use codex_config::types::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
 use codex_config::types::MemoriesToml;
+use codex_config::types::ModeKind;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
 use codex_config::types::NotificationCondition;
@@ -350,9 +351,49 @@ enabled = false
         Some(SkillsConfig {
             bundled: Some(BundledSkillsConfig { enabled: false }),
             include_instructions: Some(false),
+            metadata_context_window_percent: None,
             config: Vec::new(),
         })
     );
+}
+
+#[test]
+fn parses_skills_metadata_context_window_percent() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[skills]
+metadata_context_window_percent = 10
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.skills
+            .expect("skills config should deserialize")
+            .metadata_context_window_percent,
+        Some(10)
+    );
+}
+
+#[tokio::test]
+async fn load_config_applies_skills_metadata_context_window_percent() {
+    let codex_home = tempdir().expect("tempdir");
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[skills]
+metadata_context_window_percent = 10
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await
+    .expect("load config");
+
+    assert_eq!(config.skill_metadata_context_window_percent, Some(10));
 }
 
 #[test]
@@ -549,6 +590,7 @@ fn config_toml_deserializes_model_availability_nux() {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
             show_tooltips: true,
+            initial_collaboration_mode: None,
             alternate_screen: AltScreenMode::default(),
             status_line: None,
             terminal_title: None,
@@ -579,6 +621,22 @@ terminal_resize_reflow_max_rows = 9000
             .expect("tui config should deserialize")
             .terminal_resize_reflow_max_rows,
         Some(9000)
+    );
+}
+#[test]
+fn config_toml_deserializes_tui_initial_collaboration_mode() {
+    let toml = r#"
+[tui]
+initial_collaboration_mode = "plan"
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for TUI mode");
+
+    assert_eq!(
+        cfg.tui
+            .expect("tui config should deserialize")
+            .initial_collaboration_mode,
+        Some(ModeKind::Plan)
     );
 }
 
@@ -2062,6 +2120,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
             show_tooltips: true,
+            initial_collaboration_mode: None,
             alternate_screen: AltScreenMode::Auto,
             status_line: None,
             terminal_title: None,
@@ -6344,7 +6403,9 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             include_permissions_instructions: true,
             include_apps_instructions: true,
             include_skill_instructions: true,
+            skill_metadata_context_window_percent: None,
             include_environment_context: true,
+            initial_collaboration_mode: None,
             compact_prompt: None,
             commit_attribution: None,
             forced_chatgpt_workspace_id: None,
@@ -6540,7 +6601,9 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         include_permissions_instructions: true,
         include_apps_instructions: true,
         include_skill_instructions: true,
+        skill_metadata_context_window_percent: None,
         include_environment_context: true,
+        initial_collaboration_mode: None,
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
@@ -6690,7 +6753,9 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         include_permissions_instructions: true,
         include_apps_instructions: true,
         include_skill_instructions: true,
+        skill_metadata_context_window_percent: None,
         include_environment_context: true,
+        initial_collaboration_mode: None,
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
@@ -6825,7 +6890,9 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         include_permissions_instructions: true,
         include_apps_instructions: true,
         include_skill_instructions: true,
+        skill_metadata_context_window_percent: None,
         include_environment_context: true,
+        initial_collaboration_mode: None,
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,

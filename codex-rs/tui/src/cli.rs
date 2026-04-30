@@ -50,6 +50,12 @@ pub struct Cli {
     #[clap(skip)]
     pub fork_show_all: bool,
 
+    /// Use a specific UUID as the session/thread ID instead of generating one.
+    /// Useful for external wrappers that want the tmux session name and the
+    /// codex thread ID to match.
+    #[arg(long = "session-id", value_name = "UUID", hide = true)]
+    pub session_id_override: Option<String>,
+
     #[clap(flatten)]
     pub shared: TuiSharedCliOptions,
 

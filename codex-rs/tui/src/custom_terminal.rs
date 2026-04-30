@@ -21,9 +21,30 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
+#[cfg(unix)]
+use std::fs::OpenOptions;
 use std::io;
+#[cfg(unix)]
+use std::io::IsTerminal;
+#[cfg(unix)]
+use std::io::Read;
 use std::io::Write;
+#[cfg(unix)]
+use std::io::stdin;
+#[cfg(unix)]
+use std::io::stdout;
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(unix)]
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
+use codex_terminal_detection::TerminalTransport;
+use codex_terminal_detection::terminal_capabilities;
+use codex_terminal_detection::terminal_transport;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
 use crossterm::style::Colors;
@@ -183,11 +204,14 @@ where
     /// Creates a new [`Terminal`] with the given [`Backend`] and [`TerminalOptions`].
     pub fn with_options(mut backend: B) -> io::Result<Self> {
         let screen_size = backend.size()?;
-        let cursor_pos = backend.get_cursor_position().unwrap_or_else(|err| {
+        let cursor_pos = initial_cursor_position(&mut backend, screen_size).unwrap_or_else(|err| {
             // Some PTYs do not answer CPR (`ESC[6n`); continue with a safe default instead
             // of failing TUI startup.
             tracing::warn!("failed to read initial cursor position; defaulting to origin: {err}");
-            Position { x: 0, y: 0 }
+            Position {
+                x: 0,
+                y: screen_size.height.saturating_sub(1),
+            }
         });
         Ok(Self {
             backend,
@@ -509,6 +533,108 @@ where
     }
 }
 
+#[cfg(unix)]
+const INITIAL_CURSOR_QUERY_TIMEOUT: Duration = Duration::from_millis(75);
+
+#[cfg(unix)]
+fn initial_cursor_position<B: Backend + Write>(
+    _backend: &mut B,
+    screen_size: Size,
+) -> io::Result<Position> {
+    if !terminal_capabilities().supports_cursor_position_query {
+        return Ok(Position {
+            x: 0,
+            y: screen_size.height.saturating_sub(1),
+        });
+    }
+    query_cursor_position_with_timeout(INITIAL_CURSOR_QUERY_TIMEOUT)
+}
+
+#[cfg(not(unix))]
+fn initial_cursor_position<B: Backend + Write>(
+    backend: &mut B,
+    _screen_size: Size,
+) -> io::Result<Position> {
+    backend.get_cursor_position()
+}
+
+#[cfg(unix)]
+fn query_cursor_position_with_timeout(timeout: Duration) -> io::Result<Position> {
+    if !stdin().is_terminal() || !stdout().is_terminal() {
+        return Err(io::Error::other("stdio is not a terminal"));
+    }
+
+    let mut tty = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open("/dev/tty")?;
+
+    tty.write_all(b"\x1b[6n")?;
+    tty.flush()?;
+
+    let deadline = Instant::now() + timeout;
+    let mut response = Vec::new();
+
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+
+        let timeout_ms = remaining.as_millis().min(i32::MAX as u128) as i32;
+        let mut pollfd = libc::pollfd {
+            fd: tty.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let poll_result = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+        if poll_result == 0 {
+            break;
+        }
+        if poll_result < 0 {
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(err);
+        }
+
+        let mut chunk = [0u8; 256];
+        loop {
+            match tty.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(bytes_read) => {
+                    response.extend_from_slice(&chunk[..bytes_read]);
+                    if let Some(position) = parse_cursor_position_response(&response) {
+                        return Ok(position);
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        "timed out waiting for cursor position response",
+    ))
+}
+
+#[cfg(unix)]
+fn parse_cursor_position_response(response: &[u8]) -> Option<Position> {
+    let start = response.windows(2).position(|window| window == b"\x1b[")? + 2;
+    let payload = &response[start..];
+    let end = payload.iter().position(|&byte| byte == b'R')?;
+    let coordinates = std::str::from_utf8(&payload[..end]).ok()?;
+    let (row, column) = coordinates.split_once(';')?;
+    let row = row.parse::<u16>().ok()?.saturating_sub(1);
+    let column = column.parse::<u16>().ok()?.saturating_sub(1);
+    Some(Position { x: column, y: row })
+}
+
 use ratatui::buffer::Cell;
 
 #[derive(Debug, IsVariant)]
@@ -586,6 +712,17 @@ fn draw<I>(writer: &mut impl Write, commands: I) -> io::Result<()>
 where
     I: Iterator<Item = DrawCommand>,
 {
+    draw_with_transport(writer, commands, terminal_transport())
+}
+
+fn draw_with_transport<I>(
+    writer: &mut impl Write,
+    commands: I,
+    transport: Option<TerminalTransport>,
+) -> io::Result<()>
+where
+    I: Iterator<Item = DrawCommand>,
+{
     let mut fg = Color::Reset;
     let mut bg = Color::Reset;
     let mut modifier = Modifier::empty();
@@ -602,21 +739,22 @@ where
         last_pos = Some(Position { x, y });
         match command {
             DrawCommand::Put { cell, .. } => {
-                if cell.modifier != modifier {
+                let style = rendered_cell_style(&cell, transport);
+                if style.modifier != modifier {
                     let diff = ModifierDiff {
                         from: modifier,
-                        to: cell.modifier,
+                        to: style.modifier,
                     };
                     diff.queue(writer)?;
-                    modifier = cell.modifier;
+                    modifier = style.modifier;
                 }
-                if cell.fg != fg || cell.bg != bg {
+                if style.fg != fg || style.bg != bg {
                     queue!(
                         writer,
-                        SetColors(Colors::new(cell.fg.into(), cell.bg.into()))
+                        SetColors(Colors::new(style.fg.into(), style.bg.into()))
                     )?;
-                    fg = cell.fg;
-                    bg = cell.bg;
+                    fg = style.fg;
+                    bg = style.bg;
                 }
 
                 queue!(writer, Print(cell.symbol()))?;
@@ -639,6 +777,29 @@ where
     )?;
 
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RenderedCellStyle {
+    fg: Color,
+    bg: Color,
+    modifier: Modifier,
+}
+
+fn rendered_cell_style(cell: &Cell, transport: Option<TerminalTransport>) -> RenderedCellStyle {
+    let mut fg = cell.fg;
+    let bg = cell.bg;
+    let mut modifier = cell.modifier;
+
+    if matches!(transport, Some(TerminalTransport::Mosh))
+        && fg == Color::Reset
+        && modifier.contains(Modifier::DIM)
+    {
+        fg = Color::DarkGray;
+        modifier.remove(Modifier::DIM);
+    }
+
+    RenderedCellStyle { fg, bg, modifier }
 }
 
 /// The `ModifierDiff` struct is used to calculate the difference between two `Modifier`
@@ -758,6 +919,51 @@ mod tests {
                 .iter()
                 .any(|command| matches!(command, DrawCommand::ClearToEnd { x: 2, y: 0, .. })),
             "expected clear-to-end to start after the remaining wide char; commands: {commands:?}"
+        );
+    }
+
+    #[test]
+    fn dim_text_falls_back_to_muted_color_under_mosh() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 1, 1));
+        buffer.set_string(0, 0, "x", Style::default().add_modifier(Modifier::DIM));
+        let cell = buffer.cell((0, 0)).expect("cell should exist");
+
+        let style = rendered_cell_style(cell, Some(TerminalTransport::Mosh));
+
+        assert_eq!(
+            style,
+            RenderedCellStyle {
+                fg: Color::DarkGray,
+                bg: Color::Reset,
+                modifier: Modifier::empty(),
+            }
+        );
+    }
+
+    #[test]
+    fn dim_text_uses_native_dim_outside_mosh() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 1, 1));
+        buffer.set_string(0, 0, "x", Style::default().add_modifier(Modifier::DIM));
+        let cell = buffer.cell((0, 0)).expect("cell should exist");
+
+        let style = rendered_cell_style(cell, None);
+
+        assert_eq!(
+            style,
+            RenderedCellStyle {
+                fg: Color::Reset,
+                bg: Color::Reset,
+                modifier: Modifier::DIM,
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cursor_position_parser_accepts_cpr_response() {
+        assert_eq!(
+            parse_cursor_position_response(b"noise\x1b[12;34R"),
+            Some(Position { x: 33, y: 11 })
         );
     }
 }

@@ -3395,6 +3395,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
             codex_rollout::RolloutConfig::from_view(config.as_ref()),
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
+        /*session_id_override*/ None,
     )
     .await;
 
@@ -3714,6 +3715,7 @@ async fn make_session_with_config_and_rx(
             codex_rollout::RolloutConfig::from_view(config.as_ref()),
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
+        /*session_id_override*/ None,
     )
     .await?;
 

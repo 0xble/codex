@@ -77,6 +77,7 @@ use codex_model_provider_info::merge_configured_model_providers;
 use codex_models_manager::ModelsManagerConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -460,8 +461,14 @@ pub struct Config {
     /// Whether to inject the `<skills_instructions>` developer block.
     pub include_skill_instructions: bool,
 
+    /// Skill metadata context-window budget percent.
+    pub skill_metadata_context_window_percent: Option<usize>,
+
     /// Whether to inject the `<environment_context>` user block.
     pub include_environment_context: bool,
+
+    /// Optional TUI startup collaboration-mode override.
+    pub initial_collaboration_mode: Option<ModeKind>,
 
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
@@ -2852,7 +2859,15 @@ impl Config {
             include_permissions_instructions,
             include_apps_instructions,
             include_skill_instructions,
+            skill_metadata_context_window_percent: cfg
+                .skills
+                .as_ref()
+                .and_then(|skills| skills.metadata_context_window_percent),
             include_environment_context,
+            initial_collaboration_mode: cfg
+                .tui
+                .as_ref()
+                .and_then(|t| t.initial_collaboration_mode),
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             cli_auth_credentials_store_mode: resolve_cli_auth_credentials_store_mode(

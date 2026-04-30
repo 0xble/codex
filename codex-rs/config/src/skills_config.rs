@@ -31,6 +31,10 @@ pub struct SkillsConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_instructions: Option<bool>,
 
+    /// Percent of the active model context window available for skill metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_context_window_percent: Option<usize>,
+
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config: Vec<SkillConfig>,
 }

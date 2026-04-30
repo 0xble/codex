@@ -757,6 +757,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         environments: Vec::new(),
         analytics_events_client: None,
         thread_store,
+        session_id_override: None,
     })
     .await
     .expect("spawn guardian subagent");

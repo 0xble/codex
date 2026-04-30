@@ -9498,11 +9498,15 @@ impl ChatWidget {
     }
 
     fn initial_collaboration_mask(
-        _config: &Config,
+        config: &Config,
         model_catalog: &ModelCatalog,
         model_override: Option<&str>,
     ) -> Option<CollaborationModeMask> {
-        let mut mask = collaboration_modes::default_mask(model_catalog)?;
+        let mut mask = match config.initial_collaboration_mode {
+            Some(kind) => collaboration_modes::mask_for_kind(model_catalog, kind)
+                .or_else(|| collaboration_modes::default_mask(model_catalog))?,
+            None => collaboration_modes::default_mask(model_catalog)?,
+        };
         if let Some(model_override) = model_override {
             mask.model = Some(model_override.to_string());
         }

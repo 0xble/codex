@@ -608,6 +608,7 @@ impl App {
         should_prompt_windows_sandbox_nux_at_startup: bool,
         remote_app_server_url: Option<String>,
         remote_app_server_auth_token: Option<String>,
+        session_id_override: Option<String>,
         environment_manager: Arc<EnvironmentManager>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
@@ -716,7 +717,9 @@ impl App {
             Self::should_wait_for_initial_session(&session_selection);
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
-                let started = app_server.start_thread(&config).await?;
+                let started = app_server
+                    .start_thread_with_id_override(&config, session_id_override.clone())
+                    .await?;
                 let startup_tooltip_override =
                     prepare_startup_tooltip_override(&mut config, &available_models, is_first_run)
                         .await;

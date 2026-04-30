@@ -1192,6 +1192,14 @@
       },
       "type": "object"
     },
+    "ModeKind": {
+      "description": "Initial collaboration mode to use when the TUI starts.",
+      "enum": [
+        "plan",
+        "default"
+      ],
+      "type": "string"
+    },
     "ModelAvailabilityNuxConfig": {
       "additionalProperties": {
         "format": "uint32",
@@ -2216,6 +2224,12 @@
         "include_instructions": {
           "description": "Whether turns receive the automatic skills instructions block.",
           "type": "boolean"
+        },
+        "metadata_context_window_percent": {
+          "description": "Percent of the active model context window available for skill metadata.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
         }
       },
       "type": "object"
@@ -2359,6 +2373,15 @@
           "default": true,
           "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
           "type": "boolean"
+        },
+        "initial_collaboration_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModeKind"
+            }
+          ],
+          "default": null,
+          "description": "Initial TUI collaboration mode. Defaults to the built-in default mode."
         },
         "keymap": {
           "allOf": [

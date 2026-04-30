@@ -7,15 +7,17 @@ use super::*;
 use crate::status::format_tokens_compact;
 
 /// Items shown in the terminal title when the user has not configured a
-/// custom selection. Intentionally minimal: activity indicator + project name.
-pub(super) const DEFAULT_TERMINAL_TITLE_ITEMS: [&str; 2] = ["activity", "project-name"];
+/// custom selection. Intentionally minimal: activity indicator + thread title.
+pub(super) const DEFAULT_TERMINAL_TITLE_ITEMS: [&str; 2] = ["spinner", "thread"];
 
-/// Braille-pattern dot-spinner frames for the terminal title animation.
-pub(super) const TERMINAL_TITLE_SPINNER_FRAMES: [&str; 10] =
-    ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// Claude-style single-column spinner frames for the terminal title animation.
+///
+/// Keep these one glyph wide so terminal-title updates stay compact and render
+/// consistently through tmux, mosh, and title-aware terminals.
+pub(super) const TERMINAL_TITLE_SPINNER_FRAMES: [&str; 6] = ["·", "✢", "✳", "∗", "✻", "✽"];
 
 /// Time between spinner frame advances in the terminal title.
-pub(super) const TERMINAL_TITLE_SPINNER_INTERVAL: Duration = Duration::from_millis(100);
+pub(super) const TERMINAL_TITLE_SPINNER_INTERVAL: Duration = Duration::from_millis(120);
 
 /// Time between action-required blink phases in the terminal title.
 const TERMINAL_TITLE_ACTION_REQUIRED_INTERVAL: Duration = Duration::from_secs(1);
@@ -456,6 +458,19 @@ impl ChatWidget {
         ))
     }
 
+    pub(super) fn status_line_account_label_for_codex_home(
+        codex_home: Option<&Path>,
+    ) -> Option<String> {
+        crate::status_line_account::label_for_codex_home(codex_home)
+    }
+
+    pub(super) fn status_line_account_label(&self) -> Option<String> {
+        Self::status_line_account_label_for_codex_home(Some(self.config.codex_home.as_path()))
+            .or_else(|| {
+                Self::status_line_account_label_for_display(self.status_account_display.as_ref())
+            })
+    }
+
     /// Resets git-branch cache state when the status-line cwd changes.
     ///
     /// The branch cache is keyed by cwd because branch lookup is performed relative to that path.
@@ -499,6 +514,7 @@ impl ChatWidget {
         match item {
             StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
             StatusLineItem::ModelWithReasoning => Some(self.model_with_reasoning_display_name()),
+            StatusLineItem::Account => self.status_line_account_label(),
             StatusLineItem::CurrentDir => {
                 Some(format_directory_display(
                     self.status_line_cwd(),
@@ -581,6 +597,7 @@ impl ChatWidget {
             StatusSurfacePreviewItem::AppName => return Some("codex".to_string()),
             StatusSurfacePreviewItem::ProjectName => return self.terminal_title_project_name(),
             StatusSurfacePreviewItem::ProjectRoot => StatusLineItem::ProjectRoot,
+            StatusSurfacePreviewItem::Account => StatusLineItem::Account,
             StatusSurfacePreviewItem::Status => return Some(self.run_state_status_text()),
             StatusSurfacePreviewItem::TaskProgress => return self.terminal_title_task_progress(),
             StatusSurfacePreviewItem::CurrentDir => StatusLineItem::CurrentDir,
@@ -602,6 +619,7 @@ impl ChatWidget {
         };
         self.status_line_value_for_item(&status_line_item)
     }
+
     /// Resolves one configured terminal-title item into a displayable segment.
     ///
     /// Returning `None` means "omit this segment for now" so callers can keep
@@ -757,6 +775,15 @@ impl ChatWidget {
 
     pub(super) fn should_animate_terminal_title_action_required(&self) -> bool {
         self.config.animations && self.terminal_title_shows_action_required()
+    }
+
+    pub(super) fn status_line_account_label_for_display(
+        account_display: Option<&crate::status::StatusAccountDisplay>,
+    ) -> Option<String> {
+        match account_display? {
+            crate::status::StatusAccountDisplay::ChatGpt { email, .. } => email.clone(),
+            crate::status::StatusAccountDisplay::ApiKey => Some("api-key".to_string()),
+        }
     }
 
     fn should_animate_terminal_title_spinner_with_selections(

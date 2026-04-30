@@ -102,6 +102,17 @@ back to these environment variables.
 
 Codex stores "do not show again" flags for some UI prompts under the `[notice]` table.
 
+## Skills metadata budget
+
+Codex defaults the model-visible skill metadata budget to 2% of the active
+model context window. To override that budget without changing broader model
+context or compaction settings, set:
+
+```toml
+[skills]
+metadata_context_window_percent = 10
+```
+
 ## Plan mode defaults
 
 `plan_mode_reasoning_effort` lets you set a Plan-mode-specific default reasoning
@@ -110,6 +121,9 @@ effort override. When unset, Plan mode uses the built-in Plan preset default
 Plan preset. The string value `none` means "no reasoning" (an explicit Plan
 override), not "inherit the global default". There is currently no separate
 config value for "follow the global default in Plan mode".
+
+To choose the startup collaboration mode for the TUI, set
+`[tui].initial_collaboration_mode` to `plan` or `default`.
 
 ## Realtime start instructions
 

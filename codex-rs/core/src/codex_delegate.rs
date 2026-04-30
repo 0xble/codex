@@ -101,6 +101,7 @@ pub(crate) async fn run_codex_thread_interactive(
             .collect(),
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         thread_store: Arc::clone(&parent_session.services.thread_store),
+        session_id_override: None,
     }))
     .or_cancel(&cancel_token)
     .await??;

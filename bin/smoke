@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+INSTALL_ROOT="${CODEX_INSTALL_ROOT:-$HOME/.local/opt/codex/local}"
+INSTALL_BIN_REL="${CODEX_INSTALL_BIN_REL:-libexec/codex}"
+REAL_BIN="${CODEX_REAL_BIN:-$INSTALL_ROOT/$INSTALL_BIN_REL}"
+LAUNCHER_BIN="${CODEX_LAUNCHER_BIN:-$HOME/.local/bin/codex}"
+EXPECTED_VERSION_SUBSTR="${CODEX_EXPECT_VERSION_SUBSTR:-0xble}"
+SMOKE_CWD="${CODEX_SMOKE_CWD:-/tmp}"
+SMOKE_PROMPT="${CODEX_SMOKE_PROMPT:-Reply with exactly: smoke ok: codex}"
+
+[ -x "$REAL_BIN" ]
+real_version="$("$REAL_BIN" --version)"
+printf 'installed_bin: %s\n' "$REAL_BIN"
+printf 'installed_version: %s\n' "$real_version"
+printf '%s\n' "$real_version" | /usr/bin/grep -Fq "$EXPECTED_VERSION_SUBSTR"
+
+if [[ -x "$LAUNCHER_BIN" ]]; then
+  launcher_version="$("$LAUNCHER_BIN" --version)"
+  printf 'launcher_bin: %s\n' "$LAUNCHER_BIN"
+  printf 'launcher_version: %s\n' "$launcher_version"
+  printf '%s\n' "$launcher_version" | /usr/bin/grep -Fq "$EXPECTED_VERSION_SUBSTR"
+fi
+
+smoke_output="$(
+  "$REAL_BIN" exec \
+    --skip-git-repo-check \
+    --ephemeral \
+    --cd "$SMOKE_CWD" \
+    "$SMOKE_PROMPT"
+)"
+printf '%s\n' "$smoke_output" | /usr/bin/grep -Fq 'smoke ok: codex'
+
+echo "smoke ok: codex"

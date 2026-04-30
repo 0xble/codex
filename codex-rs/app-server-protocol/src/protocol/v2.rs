@@ -3588,6 +3588,11 @@ pub struct ThreadStartParams {
     pub ephemeral: Option<bool>,
     #[ts(optional = nullable)]
     pub session_start_source: Option<ThreadStartSource>,
+    /// Override the generated thread/session ID with a caller-supplied UUID.
+    /// Used by local fork wrappers (for example the `ai` tmux launcher) to
+    /// align tmux session names with Codex thread IDs.
+    #[ts(optional = nullable)]
+    pub session_id_override: Option<String>,
     /// Optional sticky environments for this thread.
     ///
     /// Omitted selects the default environment when environment access is

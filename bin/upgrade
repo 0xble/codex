@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+CODEX_RS_DIR="$REPO_ROOT/codex-rs"
+SRC="${CODEX_SRC:-$CODEX_RS_DIR/target/release/codex}"
+INSTALL_ROOT="${CODEX_INSTALL_ROOT:-$HOME/.local/opt/codex/local}"
+INSTALL_BIN_REL="${CODEX_INSTALL_BIN_REL:-libexec/codex}"
+INSTALL_BIN="$INSTALL_ROOT/$INSTALL_BIN_REL"
+LAUNCHER_BIN="${CODEX_LAUNCHER_BIN:-$HOME/.local/bin/codex}"
+EXPECTED_VERSION_SUBSTR="${CODEX_EXPECT_VERSION_SUBSTR:-}"
+SKIP_BUILD="${CODEX_SKIP_BUILD:-0}"
+
+print_version() {
+  local label="$1"
+  local bin_path="$2"
+  local version=""
+  version="$("$bin_path" --version)"
+  printf '%s: %s\n' "$label" "$version"
+  if [[ -n "$EXPECTED_VERSION_SUBSTR" ]]; then
+    printf '%s\n' "$version" | /usr/bin/grep -Fq "$EXPECTED_VERSION_SUBSTR"
+  fi
+}
+
+previous_version=""
+if [[ -x "$INSTALL_BIN" ]]; then
+  previous_version="$("$INSTALL_BIN" --version)"
+fi
+
+cd "$CODEX_RS_DIR"
+if [[ "$SKIP_BUILD" != "1" ]]; then
+  cargo build --release -p codex-cli
+fi
+
+mkdir -p "$(dirname "$INSTALL_BIN")"
+
+# Remove old binary before copying to ensure a new inode.
+# macOS taskgated caches code signature evaluations by inode;
+# overwriting in-place (same inode) causes "Taskgated Invalid
+# Signature" SIGKILL on the new binary.
+rm -f "$INSTALL_BIN"
+cp "$SRC" "$INSTALL_BIN"
+
+printf 'installed: %s\n' "$INSTALL_BIN"
+if [[ -n "$previous_version" ]]; then
+  printf 'previous_version: %s\n' "$previous_version"
+fi
+print_version "installed_version" "$INSTALL_BIN"
+
+if [[ -x "$LAUNCHER_BIN" ]]; then
+  print_version "launcher_version" "$LAUNCHER_BIN"
+fi

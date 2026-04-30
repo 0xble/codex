@@ -248,6 +248,7 @@ impl MemoryStartupContext {
                 metrics_service_name: None,
                 parent_trace: None,
                 environments,
+                session_id_override: None,
             })
             .await?;
 

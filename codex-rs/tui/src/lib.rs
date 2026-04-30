@@ -161,6 +161,7 @@ mod skills_helpers;
 mod slash_command;
 mod status;
 mod status_indicator_widget;
+mod status_line_account;
 mod streaming;
 mod style;
 mod terminal_palette;
@@ -1418,6 +1419,7 @@ async fn run_ratatui_app(
         prompt,
         shared,
         no_alt_screen,
+        session_id_override,
         ..
     } = cli;
     let images = shared.into_inner().images;
@@ -1465,6 +1467,7 @@ async fn run_ratatui_app(
         should_prompt_windows_sandbox_nux_at_startup,
         remote_url,
         remote_auth_token,
+        session_id_override,
         environment_manager,
     )
     .await;
