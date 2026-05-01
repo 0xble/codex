@@ -97,6 +97,9 @@ where
 {
     let mut spans = Vec::new();
     for (item, text) in segments {
+        if text.is_empty() {
+            continue;
+        }
         if !spans.is_empty() {
             spans.push(STATUS_LINE_SEPARATOR.dim());
         }
