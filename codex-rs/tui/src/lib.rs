@@ -140,6 +140,7 @@ mod markdown_stream;
 mod mention_codec;
 mod model_catalog;
 mod model_migration;
+mod motion;
 mod multi_agents;
 mod notifications;
 #[cfg(any(not(debug_assertions), test))]
@@ -184,7 +185,6 @@ mod updates;
 mod version;
 #[cfg(not(target_os = "linux"))]
 mod voice;
-mod width;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 mod voice {
@@ -242,6 +242,7 @@ mod voice {
         pub(crate) fn clear(&self) {}
     }
 }
+mod width;
 
 mod wrapping;
 
