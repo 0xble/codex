@@ -1507,6 +1507,27 @@ async fn collaboration_modes_falls_back_when_startup_mode_is_not_visible() {
     assert_eq!(chat.current_model(), resolved_model);
 }
 
+#[tokio::test]
+async fn vim_mode_default_disabled_starts_composer_in_insert_mode() {
+    let chat = make_startup_chat_with_cli_overrides(Vec::new()).await;
+    assert!(!chat.bottom_pane.composer_is_vim_enabled());
+}
+
+#[tokio::test]
+async fn vim_mode_default_enabled_starts_composer_in_normal_mode() {
+    let chat = make_startup_chat_with_cli_overrides(vec![(
+        "tui.vim_mode_default".to_string(),
+        TomlValue::Boolean(true),
+    )])
+    .await;
+
+    assert!(chat.bottom_pane.composer_is_vim_enabled());
+    assert!(chat.composer_is_empty());
+    let mut chat = chat;
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+}
+
 async fn chat_with_initial_collaboration_mode(
     initial_collaboration_mode: Option<ModeKind>,
 ) -> (ChatWidget, String) {
@@ -1521,6 +1542,23 @@ async fn chat_with_initial_collaboration_mode(
         .await
         .expect("config");
     cfg.initial_collaboration_mode = initial_collaboration_mode;
+    build_startup_chat(cfg)
+}
+
+async fn make_startup_chat_with_cli_overrides(
+    cli_overrides: Vec<(String, TomlValue)>,
+) -> ChatWidget {
+    let codex_home = tempdir().expect("tempdir");
+    let cfg = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cli_overrides(cli_overrides)
+        .build()
+        .await
+        .expect("config");
+    build_startup_chat(cfg).0
+}
+
+fn build_startup_chat(cfg: Config) -> (ChatWidget, String) {
     let resolved_model = crate::legacy_core::test_support::get_model_offline(cfg.model.as_deref());
     let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let init = ChatWidgetInit {
@@ -1536,7 +1574,7 @@ async fn chat_with_initial_collaboration_mode(
         status_account_display: None,
         runtime_model_provider_base_url: None,
         initial_plan_type: None,
-        model: Some(resolved_model.clone()),
+        model: Some(resolved_model),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),

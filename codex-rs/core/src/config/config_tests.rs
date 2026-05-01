@@ -591,8 +591,10 @@ fn config_toml_deserializes_model_availability_nux() {
             animations: true,
             show_tooltips: true,
             initial_collaboration_mode: None,
+            vim_mode_default: false,
             alternate_screen: AltScreenMode::default(),
             status_line: None,
+            status_line_use_colors: true,
             terminal_title: None,
             theme: None,
             keymap: TuiKeymap::default(),
@@ -604,6 +606,37 @@ fn config_toml_deserializes_model_availability_nux() {
             },
             terminal_resize_reflow_max_rows: None,
         }
+    );
+}
+
+#[test]
+fn config_toml_status_line_use_colors_defaults_to_enabled() {
+    let toml = r#"
+[tui]
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for TUI config");
+
+    assert!(
+        cfg.tui
+            .expect("tui config should deserialize")
+            .status_line_use_colors
+    );
+}
+
+#[test]
+fn config_toml_deserializes_status_line_use_colors_disabled() {
+    let toml = r#"
+[tui]
+status_line_use_colors = false
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for TUI config");
+
+    assert!(
+        !cfg.tui
+            .expect("tui config should deserialize")
+            .status_line_use_colors
     );
 }
 
@@ -653,6 +686,35 @@ async fn runtime_config_defaults_model_availability_nux() {
     assert_eq!(
         cfg.model_availability_nux,
         ModelAvailabilityNuxConfig::default()
+    );
+}
+
+#[test]
+fn test_tui_vim_mode_default_defaults_to_false() {
+    let toml = r#"
+        [tui]
+    "#;
+    let parsed: ConfigToml = toml::from_str(toml).expect("deserialize empty [tui] table");
+    assert!(
+        !parsed
+            .tui
+            .expect("config should include tui section")
+            .vim_mode_default
+    );
+}
+
+#[test]
+fn test_tui_vim_mode_default_true() {
+    let toml = r#"
+        [tui]
+        vim_mode_default = true
+    "#;
+    let parsed: ConfigToml = toml::from_str(toml).expect("deserialize vim_mode_default=true");
+    assert!(
+        parsed
+            .tui
+            .expect("config should include tui section")
+            .vim_mode_default
     );
 }
 
@@ -2121,8 +2183,10 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             animations: true,
             show_tooltips: true,
             initial_collaboration_mode: None,
+            vim_mode_default: false,
             alternate_screen: AltScreenMode::Auto,
             status_line: None,
+            status_line_use_colors: true,
             terminal_title: None,
             theme: None,
             keymap: TuiKeymap::default(),
@@ -3186,7 +3250,7 @@ fn web_search_mode_for_turn_falls_back_when_live_is_disallowed() -> anyhow::Resu
 }
 
 #[tokio::test]
-async fn project_profile_overrides_user_profile() -> std::io::Result<()> {
+async fn project_profiles_are_ignored() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let workspace = TempDir::new()?;
     let workspace_key = workspace.path().to_string_lossy().replace('\\', "\\\\");
@@ -3213,6 +3277,9 @@ trust_level = "trusted"
         project_config_dir.join(CONFIG_TOML_FILE),
         r#"
 profile = "project"
+
+[profiles.project]
+model = "gpt-project-local"
 "#,
     )?;
 
@@ -3225,8 +3292,19 @@ profile = "project"
         .build()
         .await?;
 
-    assert_eq!(config.active_profile.as_deref(), Some("project"));
-    assert_eq!(config.model.as_deref(), Some("gpt-project"));
+    assert_eq!(config.active_profile.as_deref(), Some("global"));
+    assert_eq!(config.model.as_deref(), Some("gpt-global"));
+    assert!(
+        config.startup_warnings.iter().any(|warning| {
+            warning.contains("profile")
+                && warning.contains("profiles")
+                && warning.contains(
+                    "If you want these settings to apply, manually set them in your user-level config.toml."
+                )
+        }),
+        "expected warning for ignored project-local profile keys: {:?}",
+        config.startup_warnings
+    );
 
     Ok(())
 }
@@ -6428,6 +6506,8 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
+            tui_vim_mode_default: false,
+            tui_keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             terminal_resize_reflow: TerminalResizeReflowConfig::default(),
             analytics_enabled: Some(true),
@@ -6435,9 +6515,9 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tool_suggest: ToolSuggestConfig::default(),
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            tui_status_line_use_colors: true,
             tui_terminal_title: None,
             tui_theme: None,
-            tui_keymap: TuiKeymap::default(),
             otel: OtelConfig::default(),
         },
         o3_profile_config
@@ -6626,6 +6706,8 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
+        tui_vim_mode_default: false,
+        tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         analytics_enabled: Some(true),
@@ -6633,9 +6715,9 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
-        tui_keymap: TuiKeymap::default(),
         otel: OtelConfig::default(),
     };
 
@@ -6778,6 +6860,8 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
+        tui_vim_mode_default: false,
+        tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         analytics_enabled: Some(false),
@@ -6785,9 +6869,9 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
-        tui_keymap: TuiKeymap::default(),
         otel: OtelConfig::default(),
     };
 
@@ -6915,6 +6999,8 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
+        tui_vim_mode_default: false,
+        tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         analytics_enabled: Some(true),
@@ -6922,9 +7008,9 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
-        tui_keymap: TuiKeymap::default(),
         otel: OtelConfig::default(),
     };
 
