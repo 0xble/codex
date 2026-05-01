@@ -171,7 +171,7 @@ async fn status_line_account_falls_back_to_auth_account_outside_instance_home() 
     });
 
     assert_eq!(
-        chat.status_line_value_for_item(&crate::bottom_pane::StatusLineItem::Account),
+        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::Account),
         Some("brian@brianle.xyz".to_string())
     );
 }
@@ -190,7 +190,7 @@ async fn status_line_account_prefers_instance_slug() {
     });
 
     assert_eq!(
-        chat.status_line_value_for_item(&crate::bottom_pane::StatusLineItem::Account),
+        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::Account),
         Some("ebjd7".to_string())
     );
 }

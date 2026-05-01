@@ -1574,7 +1574,7 @@ fn build_startup_chat(cfg: Config) -> (ChatWidget, String) {
         status_account_display: None,
         runtime_model_provider_base_url: None,
         initial_plan_type: None,
-        model: Some(resolved_model),
+        model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),

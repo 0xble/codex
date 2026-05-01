@@ -16,6 +16,7 @@ const STATUS_LINE_COLOR_BRIGHTNESS_PERCENT: u16 = 100;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StatusLineAccent {
     Model,
+    Account,
     Path,
     Branch,
     State,
@@ -31,6 +32,7 @@ impl StatusLineAccent {
     fn for_item(item: StatusLineItem) -> Self {
         match item {
             StatusLineItem::ModelName | StatusLineItem::ModelWithReasoning => Self::Model,
+            StatusLineItem::Account => Self::Account,
             StatusLineItem::CurrentDir | StatusLineItem::ProjectRoot => Self::Path,
             StatusLineItem::GitBranch => Self::Branch,
             StatusLineItem::Status => Self::State,
@@ -41,9 +43,7 @@ impl StatusLineAccent {
             | StatusLineItem::TotalInputTokens
             | StatusLineItem::TotalOutputTokens => Self::Usage,
             StatusLineItem::FiveHourLimit | StatusLineItem::WeeklyLimit => Self::Limit,
-            StatusLineItem::Account | StatusLineItem::CodexVersion | StatusLineItem::SessionId => {
-                Self::Metadata
-            }
+            StatusLineItem::CodexVersion | StatusLineItem::SessionId => Self::Metadata,
             StatusLineItem::FastMode => Self::Mode,
             StatusLineItem::ThreadTitle => Self::Thread,
             StatusLineItem::TaskProgress => Self::Progress,
@@ -53,6 +53,7 @@ impl StatusLineAccent {
     fn scopes(self) -> &'static [&'static str] {
         match self {
             Self::Model => &["entity.name.type", "support.type", "variable"],
+            Self::Account => &["variable.parameter", "entity.other.attribute-name"],
             Self::Path => &["string", "markup.underline.link"],
             Self::Branch => &["entity.name.function", "entity.name.tag"],
             Self::State => &["keyword.control", "keyword"],
@@ -68,6 +69,7 @@ impl StatusLineAccent {
     fn fallback_style(self) -> Style {
         match self {
             Self::Model | Self::State | Self::Metadata | Self::Mode => Style::default().cyan(),
+            Self::Account => Style::default().blue(),
             Self::Path | Self::Usage | Self::Progress => Style::default().green(),
             Self::Branch | Self::Limit | Self::Thread => Style::default().magenta(),
         }
@@ -189,6 +191,7 @@ mod tests {
             [
                 (StatusLineItem::ModelName, "gpt-5".to_string()),
                 (StatusLineItem::CurrentDir, "/repo".to_string()),
+                (StatusLineItem::Account, "ebjd7".to_string()),
                 (StatusLineItem::GitBranch, "main".to_string()),
             ],
             /*use_theme_colors*/ true,
@@ -196,13 +199,15 @@ mod tests {
         )
         .expect("status line");
 
-        assert_eq!(line_text(&line), "gpt-5 · /repo · main");
+        assert_eq!(line_text(&line), "gpt-5 · /repo · ebjd7 · main");
         assert_eq!(line.spans[0].style.fg, Some(Color::Cyan));
         assert!(!line.spans[0].style.add_modifier.contains(Modifier::DIM));
         assert_eq!(line.spans[2].style.fg, Some(Color::Green));
         assert!(!line.spans[2].style.add_modifier.contains(Modifier::DIM));
-        assert_eq!(line.spans[4].style.fg, Some(Color::Magenta));
+        assert_eq!(line.spans[4].style.fg, Some(Color::Blue));
         assert!(!line.spans[4].style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(line.spans[6].style.fg, Some(Color::Magenta));
+        assert!(!line.spans[6].style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]
