@@ -450,6 +450,20 @@ async fn configured_pet_load_is_deferred_until_after_construction() {
 }
 
 #[tokio::test]
+async fn status_line_account_falls_back_to_auth_account_outside_instance_home() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.status_account_display = Some(crate::status::StatusAccountDisplay::ChatGpt {
+        email: Some("brian@brianle.xyz".to_string()),
+        plan: Some("Plus".to_string()),
+    });
+
+    assert_eq!(
+        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::Account),
+        Some("brian@brianle.xyz".to_string())
+    );
+}
+
+#[tokio::test]
 async fn prefetch_rate_limits_is_gated_on_chatgpt_auth_provider() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
