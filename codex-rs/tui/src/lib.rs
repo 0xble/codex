@@ -167,6 +167,7 @@ mod status_line_account;
 mod streaming;
 mod style;
 mod terminal_palette;
+mod terminal_probe;
 mod terminal_title;
 mod text_formatting;
 mod theme_picker;
