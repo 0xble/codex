@@ -53,7 +53,7 @@ impl StatusLineAccent {
     fn scopes(self) -> &'static [&'static str] {
         match self {
             Self::Model => &["entity.name.type", "support.type", "variable"],
-            Self::Account => &["variable.parameter", "entity.other.attribute-name"],
+            Self::Account => &["markup.underline.link", "support.function"],
             Self::Path => &["string", "markup.underline.link"],
             Self::Branch => &["entity.name.function", "entity.name.tag"],
             Self::State => &["keyword.control", "keyword"],
@@ -175,6 +175,7 @@ fn soften_rgb_channel(channel: u8, luma: u16) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::style::Modifier;
 
@@ -230,6 +231,14 @@ mod tests {
         assert!(line.spans[1].style.add_modifier.contains(Modifier::DIM));
         assert_eq!(line.spans[2].style.fg, Some(Color::Green));
         assert!(!line.spans[2].style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn account_status_line_accent_uses_link_scopes() {
+        assert_snapshot!(
+            "account_status_line_accent_scopes",
+            StatusLineAccent::Account.scopes().join("\n")
+        );
     }
 
     #[test]
