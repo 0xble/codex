@@ -2,5 +2,6 @@
 source: tui/src/bottom_pane/status_line_style.rs
 expression: "StatusLineAccent::Account.scopes().join(\"\\n\")"
 ---
-markup.underline.link
-support.function
+support.type
+entity.name.type
+variable
