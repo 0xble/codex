@@ -303,6 +303,12 @@
         }
       ]
     },
+    "sessionIdOverride": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "sessionStartSource": {
       "anyOf": [
         {
