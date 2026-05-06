@@ -84,7 +84,9 @@ impl SessionTask for ReviewTask {
             None => None,
         };
         if !cancellation_token.is_cancelled() {
-            exit_review_mode(session.clone_session(), output.clone(), ctx.clone()).await;
+            return Some(
+                exit_review_mode(session.clone_session(), output.clone(), ctx.clone()).await,
+            );
         }
         Ok(None)
     }
@@ -217,7 +219,7 @@ pub(crate) async fn exit_review_mode(
     session: Arc<Session>,
     review_output: Option<ReviewOutputEvent>,
     ctx: Arc<TurnContext>,
-) {
+) -> String {
     let (user_message, assistant_message) = if let Some(out) = review_output.clone() {
         let mut findings_str = String::new();
         let text = out.overall_explanation.trim();
@@ -265,7 +267,7 @@ pub(crate) async fn exit_review_mode(
                 id: Some(ResponseItemId::new("msg")),
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
-                    text: assistant_message,
+                    text: assistant_message.clone(),
                 }],
                 phase: None,
                 internal_chat_message_metadata_passthrough: None,
@@ -277,4 +279,6 @@ pub(crate) async fn exit_review_mode(
     // materialize rollout persistence. Do this after emitting review output so
     // file creation + git metadata collection cannot delay client-facing items.
     session.ensure_rollout_materialized().await;
+
+    assistant_message
 }
