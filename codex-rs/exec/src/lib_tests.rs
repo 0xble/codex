@@ -46,8 +46,11 @@ fn builds_uncommitted_review_request() {
     let args = ReviewArgs {
         uncommitted: true,
         base: None,
+        base_commit: None,
         commit: None,
         commit_title: None,
+        files: Vec::new(),
+        dir: None,
         prompt: None,
     };
     let request = build_review_request(&args).expect("builds uncommitted review request");
@@ -65,8 +68,11 @@ fn builds_commit_review_request_with_title() {
     let args = ReviewArgs {
         uncommitted: false,
         base: None,
+        base_commit: None,
         commit: Some("123456789".to_string()),
         commit_title: Some("Add review command".to_string()),
+        files: Vec::new(),
+        dir: None,
         prompt: None,
     };
     let request = build_review_request(&args).expect("builds commit review request");
@@ -87,8 +93,11 @@ fn builds_custom_review_request_trims_prompt() {
     let args = ReviewArgs {
         uncommitted: false,
         base: None,
+        base_commit: None,
         commit: None,
         commit_title: None,
+        files: Vec::new(),
+        dir: None,
         prompt: Some("  custom review instructions  ".to_string()),
     };
     let request = build_review_request(&args).expect("builds custom review request");
@@ -101,6 +110,89 @@ fn builds_custom_review_request_trims_prompt() {
     };
 
     assert_eq!(request, expected);
+}
+
+#[test]
+fn builds_base_commit_review_request_as_custom_prompt() {
+    let args = ReviewArgs {
+        uncommitted: false,
+        base: None,
+        base_commit: Some("abc123".to_string()),
+        commit: None,
+        commit_title: None,
+        files: Vec::new(),
+        dir: None,
+        prompt: None,
+    };
+    let request = build_review_request(&args).expect("builds base commit review request");
+
+    let expected = ReviewRequest {
+        target: ReviewTarget::Custom {
+            instructions: "Review the code changes since base commit abc123. Run `git diff abc123..HEAD` to inspect the committed range, and include working tree changes only if they touch the requested scope. Provide prioritized, actionable findings.".to_string(),
+        },
+        user_facing_hint: None,
+    };
+
+    assert_eq!(request, expected);
+}
+
+#[test]
+fn builds_scoped_base_review_request_with_merge_base_prompt() {
+    let args = ReviewArgs {
+        uncommitted: false,
+        base: Some("main".to_string()),
+        base_commit: None,
+        commit: None,
+        commit_title: None,
+        files: vec![PathBuf::from("src/lib.rs")],
+        dir: None,
+        prompt: None,
+    };
+    let request = build_review_request(&args).expect("builds scoped base review request");
+
+    let expected = ReviewRequest {
+        target: ReviewTarget::Custom {
+            instructions: "Review the code changes against the base branch 'main'. Start by finding the merge base between HEAD and 'main', then run `git diff <merge-base>` to inspect the changes relative to that base. Provide prioritized, actionable findings.\n\nAdditional review constraints:\n- Limit review findings to these paths: `src/lib.rs`.\n".to_string(),
+        },
+        user_facing_hint: None,
+    };
+
+    assert_eq!(request, expected);
+}
+
+#[test]
+fn builds_path_scoped_review_request_as_custom_prompt() {
+    let args = ReviewArgs {
+        uncommitted: true,
+        base: None,
+        base_commit: None,
+        commit: None,
+        commit_title: None,
+        files: vec![PathBuf::from("src/lib.rs")],
+        dir: Some(PathBuf::from("src")),
+        prompt: None,
+    };
+    let request = build_review_request(&args).expect("builds scoped review request");
+
+    let expected = ReviewRequest {
+        target: ReviewTarget::Custom {
+            instructions: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.\n\nAdditional review constraints:\n- Limit review findings to files under directory `src`.\n- Limit review findings to these paths: `src/lib.rs`.\n".to_string(),
+        },
+        user_facing_hint: None,
+    };
+
+    assert_eq!(request, expected);
+}
+
+#[test]
+fn rejects_review_images() {
+    let err = reject_review_images(&[PathBuf::from("/tmp/context.png")])
+        .expect_err("review should reject image inputs");
+
+    assert_eq!(
+        err.to_string(),
+        "`--image` is not supported with `codex exec review`"
+    );
 }
 
 #[test]

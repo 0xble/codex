@@ -332,7 +332,9 @@ impl EventProcessorWithJsonOutput {
 
     fn map_started_item(&mut self, item: ThreadItem) -> Option<ExecThreadItem> {
         match item {
-            ThreadItem::AgentMessage { .. } | ThreadItem::Reasoning { .. } => None,
+            ThreadItem::AgentMessage { .. }
+            | ThreadItem::Reasoning { .. }
+            | ThreadItem::ExitedReviewMode { .. } => None,
             other => {
                 let raw_id = other.id().to_string();
                 Self::map_item_with_id(other, || self.started_item_id(&raw_id))
@@ -380,6 +382,7 @@ impl EventProcessorWithJsonOutput {
             .rev()
             .find_map(|item| match item {
                 ThreadItem::AgentMessage { text, .. } => Some(text.clone()),
+                ThreadItem::ExitedReviewMode { review, .. } => Some(review.clone()),
                 _ => None,
             })
             .or_else(|| {

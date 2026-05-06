@@ -11,7 +11,9 @@ pub(crate) mod event_processor_with_jsonl_output;
 pub(crate) mod exec_events;
 
 pub use cli::Cli;
+pub use cli::Color;
 pub use cli::Command;
+pub use cli::ExecSharedCliOptions;
 pub use cli::ReviewArgs;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::EnvironmentManager;
@@ -597,7 +599,8 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let default_effort = config.model_reasoning_effort;
 
     let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
-        (Some(ExecCommand::Review(review_cli)), _, _) => {
+        (Some(ExecCommand::Review(review_cli)), _, imgs) => {
+            reject_review_images(&imgs)?;
             let review_request = build_review_request(review_cli)?;
             let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);
             (InitialOperation::Review { review_request }, summary)
@@ -1826,33 +1829,120 @@ fn resolve_root_prompt(prompt_arg: Option<String>) -> String {
 }
 
 fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
-    let target = if args.uncommitted {
-        ReviewTarget::UncommittedChanges
+    if let Some(base_commit) = &args.base_commit {
+        let prompt = format!(
+            "Review the code changes since base commit {base_commit}. Run `git diff {base_commit}..HEAD` to inspect the committed range, and include working tree changes only if they touch the requested scope. Provide prioritized, actionable findings."
+        );
+        return Ok(ReviewRequest {
+            target: ReviewTarget::Custom {
+                instructions: scoped_review_prompt(prompt, args),
+            },
+            user_facing_hint: None,
+        });
+    }
+
+    let has_scope_modifiers = !args.files.is_empty() || args.dir.is_some();
+    let (target, prompt) = if args.uncommitted {
+        (
+            ReviewTarget::UncommittedChanges,
+            "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
+        )
     } else if let Some(branch) = args.base.clone() {
-        ReviewTarget::BaseBranch { branch }
+        (
+            ReviewTarget::BaseBranch {
+                branch: branch.clone(),
+            },
+            format!(
+                "Review the code changes against the base branch '{branch}'. Start by finding the merge base between HEAD and '{branch}', then run `git diff <merge-base>` to inspect the changes relative to that base. Provide prioritized, actionable findings."
+            ),
+        )
     } else if let Some(sha) = args.commit.clone() {
-        ReviewTarget::Commit {
-            sha,
-            title: args.commit_title.clone(),
-        }
+        let prompt = if let Some(title) = args.commit_title.clone() {
+            format!(
+                "Review the code changes introduced by commit {sha} (\"{title}\"). Provide prioritized, actionable findings."
+            )
+        } else {
+            format!(
+                "Review the code changes introduced by commit {sha}. Provide prioritized, actionable findings."
+            )
+        };
+        (
+            ReviewTarget::Commit {
+                sha,
+                title: args.commit_title.clone(),
+            },
+            prompt,
+        )
     } else if let Some(prompt_arg) = args.prompt.clone() {
         let prompt = resolve_prompt(Some(prompt_arg)).trim().to_string();
         if prompt.is_empty() {
             anyhow::bail!("Review prompt cannot be empty");
         }
-        ReviewTarget::Custom {
-            instructions: prompt,
-        }
+        (
+            ReviewTarget::Custom {
+                instructions: prompt.clone(),
+            },
+            prompt,
+        )
     } else {
         anyhow::bail!(
-            "Specify --uncommitted, --base, --commit, or provide custom review instructions"
+            "Specify --uncommitted, --base, --base-commit, --commit, or provide custom review instructions"
         );
+    };
+
+    let target = if has_scope_modifiers {
+        ReviewTarget::Custom {
+            instructions: scoped_review_prompt(prompt, args),
+        }
+    } else {
+        target
     };
 
     Ok(ReviewRequest {
         target,
         user_facing_hint: None,
     })
+}
+
+fn reject_review_images(images: &[PathBuf]) -> anyhow::Result<()> {
+    if !images.is_empty() {
+        anyhow::bail!("`--image` is not supported with `codex exec review`");
+    }
+
+    Ok(())
+}
+
+fn scoped_review_prompt(base_prompt: String, args: &ReviewArgs) -> String {
+    let mut prompt = base_prompt;
+    let mut constraints = Vec::new();
+
+    if let Some(dir) = &args.dir {
+        constraints.push(format!(
+            "Limit review findings to files under directory `{}`.",
+            dir.display()
+        ));
+    }
+
+    if !args.files.is_empty() {
+        let paths = args
+            .files
+            .iter()
+            .map(|path| format!("`{}`", path.display()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        constraints.push(format!("Limit review findings to these paths: {paths}."));
+    }
+
+    if !constraints.is_empty() {
+        prompt.push_str("\n\nAdditional review constraints:\n");
+        for constraint in constraints {
+            prompt.push_str("- ");
+            prompt.push_str(&constraint);
+            prompt.push('\n');
+        }
+    }
+
+    prompt
 }
 
 #[cfg(test)]

@@ -565,6 +565,7 @@ fn final_message_from_turn_items(items: &[ThreadItem]) -> Option<String> {
         .rev()
         .find_map(|item| match item {
             ThreadItem::AgentMessage { text, .. } => Some(text.clone()),
+            ThreadItem::ExitedReviewMode { review, .. } => Some(review.clone()),
             _ => None,
         })
         .or_else(|| {

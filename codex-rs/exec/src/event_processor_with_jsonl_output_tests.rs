@@ -57,3 +57,45 @@ fn failed_turn_does_not_overwrite_output_last_message_file() {
         "keep existing contents"
     );
 }
+
+#[test]
+fn exited_review_mode_updates_final_message_without_jsonl_item() {
+    let mut processor = EventProcessorWithJsonOutput::new(None);
+
+    let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        codex_app_server_protocol::ItemCompletedNotification {
+            item: ThreadItem::ExitedReviewMode {
+                id: "review-1".to_string(),
+                review: "review findings".to_string(),
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+        },
+    ));
+
+    assert_eq!(collected.status, CodexStatus::Running);
+    assert!(collected.events.is_empty());
+
+    let status = processor.process_server_notification(ServerNotification::TurnCompleted(
+        codex_app_server_protocol::TurnCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: codex_app_server_protocol::Turn {
+                id: "turn-1".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
+                items: vec![ThreadItem::ExitedReviewMode {
+                    id: "review-1".to_string(),
+                    review: "review findings".to_string(),
+                }],
+                status: TurnStatus::Completed,
+                error: None,
+                started_at: None,
+                completed_at: Some(0),
+                duration_ms: None,
+            },
+        },
+    ));
+
+    assert_eq!(status, CodexStatus::InitiateShutdown);
+    assert_eq!(processor.final_message(), Some("review findings"));
+}

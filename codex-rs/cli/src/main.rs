@@ -20,7 +20,9 @@ use codex_cli::run_login_with_device_code;
 use codex_cli::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_exec::Cli as ExecCli;
+use codex_exec::Color as ExecColor;
 use codex_exec::Command as ExecCommand;
+use codex_exec::ExecSharedCliOptions;
 use codex_exec::ReviewArgs;
 use codex_execpolicy::ExecPolicyCheckCommand;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
@@ -34,6 +36,8 @@ use codex_tui::ExitReason;
 use codex_tui::UpdateAction;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
+use codex_utils_cli::SandboxModeCliArg;
+use codex_utils_cli::SharedCliOptions;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -106,7 +110,7 @@ enum Subcommand {
     Exec(ExecCli),
 
     /// Run a code review non-interactively.
-    Review(ReviewArgs),
+    Review(ReviewCli),
 
     /// Manage login.
     Login(LoginCommand),
@@ -173,6 +177,113 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
+}
+
+#[derive(Debug, Args)]
+struct ReviewCli {
+    #[clap(flatten)]
+    pub config_overrides: CliConfigOverrides,
+
+    #[clap(flatten)]
+    pub shared: ReviewSharedCliOptions,
+
+    /// Allow running Codex outside a Git repository.
+    #[arg(long = "skip-git-repo-check", default_value_t = false)]
+    pub skip_git_repo_check: bool,
+
+    /// Run without persisting session files to disk.
+    #[arg(long = "ephemeral", default_value_t = false)]
+    pub ephemeral: bool,
+
+    /// Do not load `$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`.
+    #[arg(long = "ignore-user-config", default_value_t = false)]
+    pub ignore_user_config: bool,
+
+    /// Do not load user or project execpolicy `.rules` files.
+    #[arg(long = "ignore-rules", default_value_t = false)]
+    pub ignore_rules: bool,
+
+    /// Print events to stdout as JSONL.
+    #[arg(long = "json", alias = "experimental-json", default_value_t = false)]
+    pub json: bool,
+
+    /// Specifies file where the review output should be written.
+    #[arg(long = "output-last-message", short = 'o', value_name = "FILE")]
+    pub last_message_file: Option<PathBuf>,
+
+    /// Specifies color settings for use in the output.
+    #[arg(long = "color", value_enum, default_value_t = ExecColor::Auto)]
+    pub color: ExecColor,
+
+    #[clap(flatten)]
+    pub review: ReviewArgs,
+}
+
+#[derive(Debug, Args, Default)]
+struct ReviewSharedCliOptions {
+    /// Model the agent should use.
+    #[arg(long, short = 'm')]
+    pub model: Option<String>,
+
+    /// Use open-source provider.
+    #[arg(long = "oss", default_value_t = false)]
+    pub oss: bool,
+
+    /// Specify which local provider to use (lmstudio or ollama).
+    /// If not specified with --oss, will use config default or show selection.
+    #[arg(long = "local-provider")]
+    pub oss_provider: Option<String>,
+
+    /// Configuration profile from config.toml to specify default options.
+    #[arg(long = "profile", short = 'p')]
+    pub config_profile: Option<String>,
+
+    /// Select the sandbox policy to use when executing model-generated shell
+    /// commands.
+    #[arg(long = "sandbox", short = 's')]
+    pub sandbox_mode: Option<SandboxModeCliArg>,
+
+    /// Skip all confirmation prompts and execute commands without sandboxing.
+    /// EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed.
+    #[arg(
+        long = "dangerously-bypass-approvals-and-sandbox",
+        alias = "yolo",
+        default_value_t = false
+    )]
+    pub dangerously_bypass_approvals_and_sandbox: bool,
+
+    /// Tell the agent to use the specified directory as its working root.
+    #[clap(long = "cd", short = 'C', value_name = "DIR")]
+    pub cwd: Option<PathBuf>,
+
+    /// Additional directories that should be writable alongside the primary workspace.
+    #[arg(long = "add-dir", value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
+    pub add_dir: Vec<PathBuf>,
+}
+
+impl ReviewSharedCliOptions {
+    fn into_exec_shared_options(
+        self,
+        root: &SharedCliOptions,
+    ) -> anyhow::Result<ExecSharedCliOptions> {
+        if !root.images.is_empty() {
+            anyhow::bail!("`--image` is not supported with `codex review`");
+        }
+
+        let mut shared = ExecSharedCliOptions::default();
+        shared.model = self.model;
+        shared.oss = self.oss;
+        shared.oss_provider = self.oss_provider;
+        shared.config_profile = self.config_profile;
+        shared.sandbox_mode = self.sandbox_mode;
+        shared.dangerously_bypass_approvals_and_sandbox =
+            self.dangerously_bypass_approvals_and_sandbox;
+        shared.cwd = self.cwd;
+        shared.add_dir = self.add_dir;
+        shared.inherit_exec_root_options(root);
+        shared.images.clear();
+        Ok(shared)
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -787,14 +898,25 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             );
             codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
         }
-        Some(Subcommand::Review(review_args)) => {
+        Some(Subcommand::Review(review_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
                 root_remote_auth_token_env.as_deref(),
                 "review",
             )?;
             let mut exec_cli = ExecCli::try_parse_from(["codex", "exec"])?;
-            exec_cli.command = Some(ExecCommand::Review(review_args));
+            exec_cli.shared = review_cli
+                .shared
+                .into_exec_shared_options(&interactive.shared)?;
+            exec_cli.skip_git_repo_check = review_cli.skip_git_repo_check;
+            exec_cli.ephemeral = review_cli.ephemeral;
+            exec_cli.ignore_user_config = review_cli.ignore_user_config;
+            exec_cli.ignore_rules = review_cli.ignore_rules;
+            exec_cli.json = review_cli.json;
+            exec_cli.last_message_file = review_cli.last_message_file;
+            exec_cli.color = review_cli.color;
+            exec_cli.config_overrides = review_cli.config_overrides;
+            exec_cli.command = Some(ExecCommand::Review(review_cli.review));
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
@@ -1812,6 +1934,89 @@ mod tests {
         );
         assert_eq!(args.session_id.as_deref(), Some("session-123"));
         assert_eq!(args.prompt.as_deref(), Some("re-review"));
+    }
+
+    #[test]
+    fn review_accepts_exec_ergonomics_flags() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "review",
+            "--json",
+            "--ephemeral",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "-o",
+            "/tmp/review-output.md",
+            "--base-commit",
+            "abc123",
+            "--files",
+            "src/lib.rs",
+        ])
+        .expect("parse should succeed");
+
+        let Some(Subcommand::Review(review)) = cli.subcommand else {
+            panic!("expected review subcommand");
+        };
+
+        assert!(review.json);
+        assert!(review.ephemeral);
+        assert!(review.ignore_user_config);
+        assert!(review.ignore_rules);
+        assert_eq!(
+            review.last_message_file,
+            Some(std::path::PathBuf::from("/tmp/review-output.md"))
+        );
+        assert_eq!(review.review.base_commit.as_deref(), Some("abc123"));
+        assert_eq!(
+            review.review.files,
+            vec![std::path::PathBuf::from("src/lib.rs")]
+        );
+    }
+
+    #[test]
+    fn review_rejects_unsupported_input_flags() {
+        let image_err = MultitoolCli::try_parse_from([
+            "codex",
+            "review",
+            "--image",
+            "/tmp/context.png",
+            "--uncommitted",
+        ])
+        .expect_err("review should not accept ignored image inputs");
+        assert_eq!(image_err.kind(), clap::error::ErrorKind::UnknownArgument);
+
+        let local_only_err =
+            MultitoolCli::try_parse_from(["codex", "review", "--local-only", "--uncommitted"])
+                .expect_err("review should not accept unenforced local-only mode");
+        assert_eq!(
+            local_only_err.kind(),
+            clap::error::ErrorKind::UnknownArgument
+        );
+
+        let root_local_only_err =
+            MultitoolCli::try_parse_from(["codex", "--local-only", "review", "--uncommitted"])
+                .expect_err("review should not accept root local-only mode");
+        assert_eq!(
+            root_local_only_err.kind(),
+            clap::error::ErrorKind::UnknownArgument
+        );
+    }
+
+    #[test]
+    fn review_rejects_root_image_inheritance() {
+        let root = SharedCliOptions {
+            images: vec![std::path::PathBuf::from("/tmp/context.png")],
+            ..Default::default()
+        };
+
+        let err = ReviewSharedCliOptions::default()
+            .into_exec_shared_options(&root)
+            .expect_err("review should reject inherited image inputs");
+
+        assert_eq!(
+            err.to_string(),
+            "`--image` is not supported with `codex review`"
+        );
     }
 
     #[test]

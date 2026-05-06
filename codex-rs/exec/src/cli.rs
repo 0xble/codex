@@ -257,13 +257,13 @@ impl FromArgMatches for ResumeArgs {
     }
 }
 
-#[derive(Parser, Debug)]
+#[derive(Args, Debug)]
 pub struct ReviewArgs {
     /// Review staged, unstaged, and untracked changes.
     #[arg(
         long = "uncommitted",
         default_value_t = false,
-        conflicts_with_all = ["base", "commit", "prompt"]
+        conflicts_with_all = ["base", "base_commit", "commit", "prompt"]
     )]
     pub uncommitted: bool,
 
@@ -271,21 +271,37 @@ pub struct ReviewArgs {
     #[arg(
         long = "base",
         value_name = "BRANCH",
-        conflicts_with_all = ["uncommitted", "commit", "prompt"]
+        conflicts_with_all = ["uncommitted", "base_commit", "commit", "prompt"]
     )]
     pub base: Option<String>,
+
+    /// Review changes since the given base commit.
+    #[arg(
+        long = "base-commit",
+        value_name = "SHA",
+        conflicts_with_all = ["uncommitted", "base", "commit", "prompt"]
+    )]
+    pub base_commit: Option<String>,
 
     /// Review the changes introduced by a commit.
     #[arg(
         long = "commit",
         value_name = "SHA",
-        conflicts_with_all = ["uncommitted", "base", "prompt"]
+        conflicts_with_all = ["uncommitted", "base", "base_commit", "prompt"]
     )]
     pub commit: Option<String>,
 
     /// Optional commit title to display in the review summary.
     #[arg(long = "title", value_name = "TITLE", requires = "commit")]
     pub commit_title: Option<String>,
+
+    /// Limit the review to one or more paths.
+    #[arg(long = "files", value_name = "PATH", num_args = 1..)]
+    pub files: Vec<PathBuf>,
+
+    /// Limit the review to files under the given directory.
+    #[arg(long = "dir", value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
+    pub dir: Option<PathBuf>,
 
     /// Custom review instructions. If `-` is used, read from stdin.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
