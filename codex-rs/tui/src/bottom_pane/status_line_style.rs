@@ -55,7 +55,7 @@ impl StatusLineAccent {
     fn scopes(self) -> &'static [&'static str] {
         match self {
             Self::Model => &["entity.name.type", "support.type", "variable"],
-            Self::Account => &["markup.underline.link", "support.function"],
+            Self::Account => &["support.type", "entity.name.type", "variable"],
             Self::Path => &["string", "markup.underline.link"],
             Self::Branch => &["entity.name.function", "entity.name.tag"],
             Self::State => &["keyword.control", "keyword"],
@@ -241,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn account_status_line_accent_uses_link_scopes() {
+    fn account_status_line_accent_uses_blue_scopes() {
         assert_snapshot!(
             "account_status_line_accent_scopes",
             StatusLineAccent::Account.scopes().join("\n")
