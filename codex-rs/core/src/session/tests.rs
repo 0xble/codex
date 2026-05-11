@@ -5246,6 +5246,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
+        /*session_id_override*/ None,
     )
     .await;
 
@@ -5628,6 +5629,7 @@ async fn make_session_with_config_and_rx(
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
+        /*session_id_override*/ None,
     )
     .await?;
 
@@ -5743,6 +5745,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
+        /*session_id_override*/ None,
     )
     .await?;
 

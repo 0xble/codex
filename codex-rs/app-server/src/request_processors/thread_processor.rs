@@ -929,6 +929,7 @@ impl ThreadRequestProcessor {
             ephemeral,
             history_mode,
             session_start_source,
+            session_id_override,
             thread_source,
             environments,
         } = params;
@@ -984,6 +985,7 @@ impl ThreadRequestProcessor {
                 selected_capability_roots.unwrap_or_default(),
                 history_mode.map(Into::into),
                 session_start_source,
+                session_id_override,
                 thread_source.map(Into::into),
                 environment_selections,
                 service_name,
@@ -1060,6 +1062,7 @@ impl ThreadRequestProcessor {
         selected_capability_roots: Vec<SelectedCapabilityRoot>,
         history_mode: Option<ThreadHistoryMode>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
+        session_id_override: Option<String>,
         thread_source: Option<codex_protocol::protocol::ThreadSource>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
         service_name: Option<String>,
@@ -1186,6 +1189,7 @@ impl ThreadRequestProcessor {
                 environments,
                 thread_extension_init,
                 supports_openai_form_elicitation,
+                session_id_override,
             })
             .instrument(tracing::info_span!(
                 "app_server.thread_start.create_thread",

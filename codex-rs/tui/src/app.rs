@@ -629,6 +629,7 @@ async fn resolve_runtime_model_provider_base_url(provider: &ModelProviderInfo) -
 fn spawn_startup_thread_start(
     app_server: &AppServerSession,
     config: Config,
+    session_id_override: Option<String>,
     app_event_tx: AppEventSender,
 ) {
     let request_handle = app_server.request_handle();
@@ -638,6 +639,7 @@ fn spawn_startup_thread_start(
         let result = crate::app_server_session::start_thread_with_request_handle(
             request_handle,
             config,
+            session_id_override,
             thread_params_mode,
             remote_cwd_override,
         )
@@ -771,6 +773,7 @@ impl App {
         is_first_run: bool,
         should_prompt_windows_sandbox_nux_at_startup: bool,
         app_server_target: AppServerTarget,
+        session_id_override: Option<String>,
         state_db: Option<StateDbHandle>,
         environment_manager: Arc<EnvironmentManager>,
         startup_elapsed_before_app: Duration,
@@ -888,7 +891,12 @@ impl App {
         );
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
-                spawn_startup_thread_start(&app_server, config.clone(), app_event_tx.clone());
+                spawn_startup_thread_start(
+                    &app_server,
+                    config.clone(),
+                    session_id_override.clone(),
+                    app_event_tx.clone(),
+                );
                 // Count a startup tooltip once the initial chat widget can render it.
                 let startup_tooltip_override =
                     prepare_startup_tooltip_override(&mut config, &available_models, is_first_run)
