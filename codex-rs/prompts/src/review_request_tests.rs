@@ -29,6 +29,8 @@ fn review_prompt_template_renders_commit_variant() {
                 title: None,
             },
             &AbsolutePathBuf::current_dir().expect("cwd"),
+            /*supplemental_instructions*/ None,
+            &[],
         )
         .expect("commit prompt should render"),
         "Review the code changes introduced by commit deadbeef. Provide prioritized, actionable findings."
@@ -44,6 +46,8 @@ fn review_prompt_template_renders_commit_variant_with_title() {
                 title: Some("Fix bug".to_string()),
             },
             &AbsolutePathBuf::current_dir().expect("cwd"),
+            /*supplemental_instructions*/ None,
+            &[],
         )
         .expect("commit prompt should render"),
         "Review the code changes introduced by commit deadbeef (\"Fix bug\"). Provide prioritized, actionable findings."

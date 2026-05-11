@@ -168,7 +168,7 @@ pub enum Command {
     Resume(ResumeArgs),
 
     /// Run a code review against the current repository.
-    Review(ReviewArgs),
+    Review(Box<ReviewArgs>),
 }
 
 #[derive(Args, Debug)]
@@ -268,7 +268,7 @@ pub struct ReviewArgs {
     #[arg(
         long = "uncommitted",
         default_value_t = false,
-        conflicts_with_all = ["base", "base_commit", "commit", "prompt"]
+        conflicts_with_all = ["base", "base_commit", "commit"]
     )]
     pub uncommitted: bool,
 
@@ -276,7 +276,7 @@ pub struct ReviewArgs {
     #[arg(
         long = "base",
         value_name = "BRANCH",
-        conflicts_with_all = ["uncommitted", "base_commit", "commit", "prompt"]
+        conflicts_with_all = ["uncommitted", "base_commit", "commit"]
     )]
     pub base: Option<String>,
 
@@ -284,7 +284,7 @@ pub struct ReviewArgs {
     #[arg(
         long = "base-commit",
         value_name = "SHA",
-        conflicts_with_all = ["uncommitted", "base", "commit", "prompt"]
+        conflicts_with_all = ["uncommitted", "base", "commit"]
     )]
     pub base_commit: Option<String>,
 
@@ -292,7 +292,7 @@ pub struct ReviewArgs {
     #[arg(
         long = "commit",
         value_name = "SHA",
-        conflicts_with_all = ["uncommitted", "base", "base_commit", "prompt"]
+        conflicts_with_all = ["uncommitted", "base", "base_commit"]
     )]
     pub commit: Option<String>,
 
@@ -301,16 +301,65 @@ pub struct ReviewArgs {
     pub commit_title: Option<String>,
 
     /// Limit the review to one or more paths.
-    #[arg(long = "files", value_name = "PATH", num_args = 1..)]
+    #[arg(long = "files", alias = "paths", value_name = "PATH", num_args = 1..)]
     pub files: Vec<PathBuf>,
+
+    /// Read additional review paths from a newline-delimited file.
+    #[arg(long = "pathspec-from-file", value_name = "FILE")]
+    pub pathspec_from_file: Option<PathBuf>,
 
     /// Limit the review to files under the given directory.
     #[arg(long = "dir", value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
     pub dir: Option<PathBuf>,
 
+    /// Supplemental reviewer instructions to combine with a native review target.
+    #[arg(long = "instructions", value_name = "TEXT")]
+    pub instructions: Option<String>,
+
+    /// Read supplemental reviewer instructions from a file.
+    #[arg(long = "instructions-file", value_name = "FILE")]
+    pub instructions_file: Option<PathBuf>,
+
+    /// Write the structured review result to a JSON file.
+    #[arg(long = "output-review-json", value_name = "FILE")]
+    pub output_review_json: Option<PathBuf>,
+
+    /// Interrupt the review if it runs longer than this duration, e.g. 300s or 5m.
+    #[arg(long = "timeout", value_name = "DURATION", value_parser = parse_review_timeout_ms)]
+    pub timeout_ms: Option<u64>,
+
+    /// Exit with status 1 when the review reports findings.
+    #[arg(long = "fail-on-findings", default_value_t = false)]
+    pub fail_on_findings: bool,
+
     /// Custom review instructions. If `-` is used, read from stdin.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
     pub prompt: Option<String>,
+}
+
+fn parse_review_timeout_ms(value: &str) -> Result<u64, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("timeout must not be empty".to_string());
+    }
+    let (number, multiplier) = if let Some(number) = trimmed.strip_suffix("ms") {
+        (number, 1)
+    } else if let Some(number) = trimmed.strip_suffix('s') {
+        (number, 1_000)
+    } else if let Some(number) = trimmed.strip_suffix('m') {
+        (number, 60_000)
+    } else {
+        (trimmed, 1_000)
+    };
+    let amount = number.parse::<u64>().map_err(|_| {
+        "timeout must be a positive integer with optional ms, s, or m suffix".to_string()
+    })?;
+    if amount == 0 {
+        return Err("timeout must be greater than zero".to_string());
+    }
+    amount
+        .checked_mul(multiplier)
+        .ok_or_else(|| "timeout is too large".to_string())
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]

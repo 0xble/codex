@@ -1106,6 +1106,8 @@ impl AppServerSession {
                 params: ReviewStartParams {
                     thread_id: thread_id.to_string(),
                     target,
+                    supplemental_instructions: None,
+                    pathspecs: None,
                     delivery: Some(ReviewDelivery::Inline),
                 },
             })
