@@ -1836,6 +1836,7 @@ mod tests {
                 ThreadItem::ExitedReviewMode {
                     id: "exited-review".into(),
                     review: REVIEW_FALLBACK_MESSAGE.into(),
+                    review_output: None,
                 },
             ]
         );
@@ -1898,6 +1899,7 @@ mod tests {
                 ThreadItem::ExitedReviewMode {
                     id: "exited-review".into(),
                     review: REVIEW_FALLBACK_MESSAGE.into(),
+                    review_output: None,
                 },
             ]
         );

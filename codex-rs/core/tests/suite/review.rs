@@ -317,6 +317,8 @@ async fn cancelled_review_does_not_forward_delegate_mcp_startup() {
                     instructions: "Cancel this review".to_string(),
                 },
                 user_facing_hint: None,
+                supplemental_instructions: None,
+                pathspecs: Vec::new(),
             },
         })
         .await

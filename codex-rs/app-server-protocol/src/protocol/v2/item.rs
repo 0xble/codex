@@ -942,6 +942,10 @@ impl From<CoreTurnItem> for ThreadItem {
             CoreTurnItem::ExitedReviewMode(review) => ThreadItem::ExitedReviewMode {
                 id: review.id,
                 review: review_output_text(review.review_output.as_ref()),
+                review_output: review
+                    .review_output
+                    .as_ref()
+                    .and_then(|review_output| serde_json::to_value(review_output).ok()),
             },
             CoreTurnItem::FileChange(file_change) => ThreadItem::FileChange {
                 id: file_change.id,

@@ -1473,14 +1473,16 @@ pub(crate) async fn start_thread_with_request_handle(
     config: Config,
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<PathBuf>,
+    session_id_override: Option<String>,
 ) -> Result<AppServerStartedThread> {
     let request_id = RequestId::String(format!("startup-thread-start-{}", Uuid::new_v4()));
-    let params = thread_start_params_from_config(
+    let mut params = thread_start_params_from_config(
         &config,
         thread_params_mode,
         remote_cwd_override.as_deref(),
         /*session_start_source*/ None,
     );
+    params.session_id_override = session_id_override;
     let (response, _history_support) =
         request_thread_start_with_history_fallback(&request_handle, request_id, params)
             .await

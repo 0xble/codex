@@ -50,6 +50,7 @@ use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID;
@@ -218,6 +219,7 @@ pub struct StartThreadOptions {
     pub environments: Option<Vec<TurnEnvironmentSelection>>,
     pub thread_extension_init: ExtensionDataInit,
     pub client_mcp_extensions: ClientMcpExtensions,
+    pub session_id_override: Option<String>,
 }
 
 impl StartThreadOptions {
@@ -235,6 +237,7 @@ impl StartThreadOptions {
             environments: None,
             thread_extension_init: ExtensionDataInit::default(),
             client_mcp_extensions: ClientMcpExtensions::default(),
+            session_id_override: None,
         }
     }
 }
@@ -1681,6 +1684,7 @@ impl ThreadManagerState {
             environments,
             thread_extension_init,
             client_mcp_extensions,
+            session_id_override,
         } = options;
         let session_source = session_source.unwrap_or_else(|| self.session_source.clone());
         let environments = environments.unwrap_or_else(|| {
@@ -1712,6 +1716,8 @@ impl ThreadManagerState {
                 threads.remove(&resumed.conversation_id);
             }
         }
+        self.reject_duplicate_session_id_override(&initial_history, session_id_override.as_deref())
+            .await?;
         let user_instructions = self
             .user_instructions_for_spawn(&session_source, parent_thread_id, forked_from_thread_id)
             .await;
@@ -1780,6 +1786,7 @@ impl ThreadManagerState {
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),
             attestation_provider: self.attestation_provider.clone(),
+            session_id_override,
             external_time_provider: self.external_time_provider.clone(),
             inherited_multi_agent_version: multi_agent_version,
             git_enrichment_policy: GitEnrichmentPolicy::Fresh,
@@ -1808,6 +1815,43 @@ impl ThreadManagerState {
             new_thread.thread.emit_thread_resume_lifecycle().await;
         }
         Ok(new_thread)
+    }
+
+    async fn reject_duplicate_session_id_override(
+        &self,
+        initial_history: &InitialHistory,
+        session_id_override: Option<&str>,
+    ) -> CodexResult<()> {
+        if matches!(initial_history, InitialHistory::Resumed(_)) {
+            return Ok(());
+        }
+        let Some(session_id_override) = session_id_override else {
+            return Ok(());
+        };
+        let thread_id = ThreadId::from_string(session_id_override).map_err(|err| {
+            CodexErr::InvalidRequest(format!(
+                "invalid session id override `{session_id_override}`: {err}"
+            ))
+        })?;
+        if self.threads.read().await.contains_key(&thread_id) {
+            return Err(CodexErr::InvalidRequest(format!(
+                "session id override `{thread_id}` is already in use"
+            )));
+        }
+        match self
+            .read_stored_thread(ReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: false,
+            })
+            .await
+        {
+            Ok(_) => Err(CodexErr::InvalidRequest(format!(
+                "session id override `{thread_id}` already exists"
+            ))),
+            Err(err) if matches!(err.details(), CodexErrorDetails::ThreadNotFound(_)) => Ok(()),
+            Err(err) => Err(err),
+        }
     }
 
     async fn finalize_thread_spawn(

@@ -602,6 +602,7 @@ impl Session {
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
+        session_id_override: Option<String>,
         external_time_provider: Option<Arc<dyn TimeProvider>>,
         multi_agent_version: Option<MultiAgentVersion>,
         git_enrichment_policy: GitEnrichmentPolicy,
@@ -656,7 +657,14 @@ impl Session {
 
         let thread_id = match &initial_history {
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
-                agent_control.generate_thread_id()
+                match session_id_override.as_deref() {
+                    Some(override_value) => {
+                        ThreadId::from_string(override_value).map_err(|err| {
+                            anyhow::anyhow!("invalid session_id_override `{override_value}`: {err}")
+                        })?
+                    }
+                    None => agent_control.generate_thread_id(),
+                }
             }
             InitialHistory::Resumed(resumed_history) => resumed_history.conversation_id,
         };

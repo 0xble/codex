@@ -840,6 +840,7 @@ mod tests {
         review_turn.items.push(ThreadItem::ExitedReviewMode {
             id: "review-end".to_string(),
             review: "review complete".to_string(),
+            review_output: None,
         });
         let turns = vec![
             turn("turn-1", TurnStatus::Completed, /*user_messages*/ 1),
@@ -872,6 +873,7 @@ mod tests {
                 ThreadItem::ExitedReviewMode {
                     id: "review-end".to_string(),
                     review: "review complete".to_string(),
+                    review_output: None,
                 },
             ],
             ..turn(

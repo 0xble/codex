@@ -1,6 +1,7 @@
 use codex_core::config::Constrained;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -148,15 +149,19 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
     let server = start_mock_server().await;
     mount_sse_sequence(&server, vec![sse1, sse2]).await;
 
-    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
-        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-        // Use a restricted sandbox so patch approval is required
-        config
-            .permissions
-            .set_permission_profile(PermissionProfile::read_only())
-            .expect("set permission profile");
-        config.include_apply_patch_tool = true;
-    });
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+        })
+        .with_config(|config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            // Use a restricted sandbox so patch approval is required
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::read_only())
+                .expect("set permission profile");
+        });
     let test = builder.build(&server).await.expect("build test codex");
 
     test.codex
@@ -189,7 +194,9 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
     test.codex
         .submit(Op::PatchApproval {
             id: approval.call_id,
-            decision: ReviewDecision::Denied,
+            decision: ReviewDecision::Denied {
+                rejection: "denied by test".to_string(),
+            },
         })
         .await
         .expect("submit patch approval");

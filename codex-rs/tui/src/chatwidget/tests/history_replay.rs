@@ -296,6 +296,7 @@ async fn replayed_nested_review_prompts_do_not_render_or_seed_composer_history()
             AppServerThreadItem::ExitedReviewMode {
                 id: format!("{turn_id}-end"),
                 review: "review complete".to_string(),
+                review_output: None,
             },
         ],
         ..app_server_turn(

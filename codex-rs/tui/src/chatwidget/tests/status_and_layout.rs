@@ -534,6 +534,7 @@ async fn status_line_account_refreshes_after_account_update() {
         }),
         None,
         true,
+        false,
     );
 
     assert_eq!(

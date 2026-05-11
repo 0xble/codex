@@ -619,6 +619,87 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
 }
 
 #[tokio::test]
+async fn start_thread_uses_session_id_override_for_new_threads() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let session_id_override = "00000000-0000-0000-0000-000000000001".to_string();
+    let expected_thread_id =
+        codex_protocol::ThreadId::from_string(&session_id_override).expect("thread id");
+
+    let thread = manager
+        .start_thread(StartThreadOptions {
+            session_id_override: Some(session_id_override),
+            ..StartThreadOptions::new(config)
+        })
+        .await
+        .expect("thread should start");
+
+    assert_eq!(thread.thread_id, expected_thread_id);
+    assert!(manager.get_thread(thread.thread_id).await.is_ok());
+}
+
+#[tokio::test]
+async fn start_thread_rejects_reused_session_id_override() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let session_id_override = "00000000-0000-0000-0000-000000000001".to_string();
+    let first = manager
+        .start_thread(StartThreadOptions {
+            session_id_override: Some(session_id_override.clone()),
+            ..StartThreadOptions::new(config.clone())
+        })
+        .await
+        .expect("first thread should start");
+    first.thread.ensure_rollout_materialized().await;
+    first
+        .thread
+        .flush_rollout()
+        .await
+        .expect("flush first thread");
+    first
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown first thread");
+    let _ = manager.remove_thread(&first.thread_id).await;
+
+    let duplicate = manager
+        .start_thread(StartThreadOptions {
+            session_id_override: Some(session_id_override),
+            ..StartThreadOptions::new(config)
+        })
+        .await;
+
+    let err = match duplicate {
+        Ok(_) => panic!("duplicate override should fail"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(err.details(), codex_protocol::error::CodexErrorDetails::InvalidRequest(message) if message.contains("already exists"))
+    );
+}
+
+#[tokio::test]
 async fn code_mode_session_provider_is_shared_across_threads() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
