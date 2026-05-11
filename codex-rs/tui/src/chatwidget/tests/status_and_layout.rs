@@ -464,6 +464,28 @@ async fn status_line_account_falls_back_to_auth_account_outside_instance_home() 
 }
 
 #[tokio::test]
+async fn status_line_account_refreshes_after_account_update() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_status_line = Some(vec!["account".to_string()]);
+    chat.refresh_status_line();
+    assert_eq!(status_line_text(&chat), None);
+
+    chat.update_account_state(
+        Some(crate::status::StatusAccountDisplay::ChatGpt {
+            email: Some("brian@brianle.xyz".to_string()),
+            plan: Some("Plus".to_string()),
+        }),
+        None,
+        true,
+    );
+
+    assert_eq!(
+        status_line_text(&chat),
+        Some("brian@brianle.xyz".to_string())
+    );
+}
+
+#[tokio::test]
 async fn prefetch_rate_limits_is_gated_on_chatgpt_auth_provider() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

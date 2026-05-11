@@ -10,6 +10,7 @@
 //! # Available Status Line Items
 //!
 //! - Model information (name, reasoning level)
+//! - Account identifier or authentication mode
 //! - Directory paths (current dir, project root)
 //! - Git information (branch name)
 //! - Permissions profile
@@ -136,6 +137,9 @@ pub(crate) enum StatusLineItem {
 
     /// Latest checklist task progress from `update_plan` (if available).
     TaskProgress,
+
+    /// Current account identifier or authentication mode.
+    Account,
 }
 
 impl StatusLineItem {
@@ -144,6 +148,7 @@ impl StatusLineItem {
         match self {
             StatusLineItem::ModelName => "Current model name",
             StatusLineItem::ModelWithReasoning => "Current model name with reasoning level",
+            StatusLineItem::Account => "Current account or authentication mode",
             StatusLineItem::CurrentDir => "Current working directory",
             StatusLineItem::ProjectRoot => "Project name (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
@@ -191,6 +196,7 @@ impl StatusLineItem {
         match self {
             StatusLineItem::ModelName => StatusSurfacePreviewItem::Model,
             StatusLineItem::ModelWithReasoning => StatusSurfacePreviewItem::ModelWithReasoning,
+            StatusLineItem::Account => StatusSurfacePreviewItem::Account,
             StatusLineItem::CurrentDir => StatusSurfacePreviewItem::CurrentDir,
             StatusLineItem::ProjectRoot => StatusSurfacePreviewItem::ProjectRoot,
             StatusLineItem::GitBranch => StatusSurfacePreviewItem::GitBranch,

@@ -57,7 +57,7 @@ impl StatusLineAccent {
     fn scopes(self) -> &'static [&'static str] {
         match self {
             Self::Model => &["entity.name.type", "support.type", "variable"],
-            Self::Account => &["support.type", "entity.name.type", "variable"],
+            Self::Account => &["entity.name.type", "variable", "support.type"],
             Self::Path => &["string", "markup.underline.link"],
             Self::Branch => &["entity.name.function", "entity.name.tag"],
             Self::State => &["keyword.control", "keyword"],
@@ -112,7 +112,14 @@ where
         let style = if use_theme_colors {
             let accent = StatusLineAccent::for_item(item);
             soften_status_line_style(
-                theme_style_for_accent(accent).unwrap_or_else(|| accent.fallback_style()),
+                // Some bundled themes map account-like scopes to yellow. Keep
+                // account identifiers on the explicit blue accent instead.
+                if accent == StatusLineAccent::Account {
+                    None
+                } else {
+                    theme_style_for_accent(accent)
+                }
+                .unwrap_or_else(|| accent.fallback_style()),
             )
         } else {
             Style::default().dim()
@@ -248,6 +255,19 @@ mod tests {
             "account_status_line_accent_scopes",
             StatusLineAccent::Account.scopes().join("\n")
         );
+    }
+
+    #[test]
+    fn account_status_line_accent_uses_blue_fallback_over_theme_scope() {
+        let line = status_line_from_segments_with_resolver(
+            [(StatusLineItem::Account, "brian@brianle.xyz".to_string())],
+            /*use_theme_colors*/ true,
+            |_| Some(Style::default().yellow()),
+        )
+        .expect("status line");
+
+        assert_eq!(line.spans[0].style.fg, Some(Color::Blue));
+        assert!(!line.spans[0].style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]

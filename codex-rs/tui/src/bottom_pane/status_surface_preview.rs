@@ -32,6 +32,7 @@ pub(crate) enum StatusSurfacePreviewItem {
     RawOutput,
     Model,
     ModelWithReasoning,
+    Account,
     TaskProgress,
 }
 
@@ -63,6 +64,7 @@ impl StatusSurfacePreviewItem {
             StatusSurfacePreviewItem::RawOutput => "raw output",
             StatusSurfacePreviewItem::Model => "gpt-5.2-codex",
             StatusSurfacePreviewItem::ModelWithReasoning => "gpt-5.2-codex medium",
+            StatusSurfacePreviewItem::Account => "brian@brianle.xyz",
             StatusSurfacePreviewItem::TaskProgress => "Tasks 0/0",
         }
     }
@@ -94,6 +96,7 @@ impl StatusSurfacePreviewItem {
             Self::RawOutput,
             Self::Model,
             Self::ModelWithReasoning,
+            Self::Account,
             Self::TaskProgress,
         ]
         .into_iter()
