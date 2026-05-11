@@ -1157,6 +1157,10 @@ impl ThreadHistoryBuilder {
         &mut self,
         payload: &codex_protocol::protocol::ExitedReviewModeEvent,
     ) {
+        let review_output = payload
+            .review_output
+            .as_ref()
+            .and_then(|output| serde_json::to_value(output).ok());
         let review = review_output_text(payload.review_output.as_ref());
         let id = payload
             .item_id
@@ -1164,7 +1168,11 @@ impl ThreadHistoryBuilder {
             .unwrap_or_else(|| self.next_item_id());
         self.upsert_review_mode_item(
             payload.turn_id.as_deref(),
-            ThreadItem::ExitedReviewMode { id, review },
+            ThreadItem::ExitedReviewMode {
+                id,
+                review,
+                review_output,
+            },
         );
     }
 

@@ -106,7 +106,13 @@ fn builds_uncommitted_review_request() {
         commit: None,
         commit_title: None,
         files: Vec::new(),
+        pathspec_from_file: None,
         dir: None,
+        instructions: None,
+        instructions_file: None,
+        output_review_json: None,
+        timeout_ms: None,
+        fail_on_findings: false,
         prompt: None,
     };
     let request = build_review_request(&args).expect("builds uncommitted review request");
@@ -114,6 +120,8 @@ fn builds_uncommitted_review_request() {
     let expected = ReviewRequest {
         target: ReviewTarget::UncommittedChanges,
         user_facing_hint: None,
+        supplemental_instructions: None,
+        pathspecs: Vec::new(),
     };
 
     assert_eq!(request, expected);
@@ -128,7 +136,13 @@ fn builds_commit_review_request_with_title() {
         commit: Some("123456789".to_string()),
         commit_title: Some("Add review command".to_string()),
         files: Vec::new(),
+        pathspec_from_file: None,
         dir: None,
+        instructions: None,
+        instructions_file: None,
+        output_review_json: None,
+        timeout_ms: None,
+        fail_on_findings: false,
         prompt: None,
     };
     let request = build_review_request(&args).expect("builds commit review request");
@@ -139,6 +153,8 @@ fn builds_commit_review_request_with_title() {
             title: Some("Add review command".to_string()),
         },
         user_facing_hint: None,
+        supplemental_instructions: None,
+        pathspecs: Vec::new(),
     };
 
     assert_eq!(request, expected);
@@ -153,7 +169,13 @@ fn builds_custom_review_request_trims_prompt() {
         commit: None,
         commit_title: None,
         files: Vec::new(),
+        pathspec_from_file: None,
         dir: None,
+        instructions: None,
+        instructions_file: None,
+        output_review_json: None,
+        timeout_ms: None,
+        fail_on_findings: false,
         prompt: Some("  custom review instructions  ".to_string()),
     };
     let request = build_review_request(&args).expect("builds custom review request");
@@ -163,6 +185,8 @@ fn builds_custom_review_request_trims_prompt() {
             instructions: "custom review instructions".to_string(),
         },
         user_facing_hint: None,
+        supplemental_instructions: None,
+        pathspecs: Vec::new(),
     };
 
     assert_eq!(request, expected);
@@ -177,7 +201,13 @@ fn builds_base_commit_review_request_as_custom_prompt() {
         commit: None,
         commit_title: None,
         files: Vec::new(),
+        pathspec_from_file: None,
         dir: None,
+        instructions: None,
+        instructions_file: None,
+        output_review_json: None,
+        timeout_ms: None,
+        fail_on_findings: false,
         prompt: None,
     };
     let request = build_review_request(&args).expect("builds base commit review request");
@@ -187,6 +217,8 @@ fn builds_base_commit_review_request_as_custom_prompt() {
             instructions: "Review the code changes since base commit abc123. Run `git diff abc123..HEAD` to inspect the committed range, and include working tree changes only if they touch the requested scope. Provide prioritized, actionable findings.".to_string(),
         },
         user_facing_hint: None,
+        supplemental_instructions: None,
+        pathspecs: Vec::new(),
     };
 
     assert_eq!(request, expected);
@@ -201,16 +233,24 @@ fn builds_scoped_base_review_request_with_merge_base_prompt() {
         commit: None,
         commit_title: None,
         files: vec![PathBuf::from("src/lib.rs")],
+        pathspec_from_file: None,
         dir: None,
+        instructions: None,
+        instructions_file: None,
+        output_review_json: None,
+        timeout_ms: None,
+        fail_on_findings: false,
         prompt: None,
     };
     let request = build_review_request(&args).expect("builds scoped base review request");
 
     let expected = ReviewRequest {
-        target: ReviewTarget::Custom {
-            instructions: "Review the code changes against the base branch 'main'. Start by finding the merge base between HEAD and 'main', then run `git diff <merge-base>` to inspect the changes relative to that base. Provide prioritized, actionable findings.\n\nAdditional review constraints:\n- Limit review findings to these paths: `src/lib.rs`.\n".to_string(),
+        target: ReviewTarget::BaseBranch {
+            branch: "main".to_string(),
         },
         user_facing_hint: None,
+        supplemental_instructions: None,
+        pathspecs: vec!["src/lib.rs".to_string()],
     };
 
     assert_eq!(request, expected);
@@ -225,16 +265,22 @@ fn builds_path_scoped_review_request_as_custom_prompt() {
         commit: None,
         commit_title: None,
         files: vec![PathBuf::from("src/lib.rs")],
+        pathspec_from_file: None,
         dir: Some(PathBuf::from("src")),
+        instructions: None,
+        instructions_file: None,
+        output_review_json: None,
+        timeout_ms: None,
+        fail_on_findings: false,
         prompt: None,
     };
     let request = build_review_request(&args).expect("builds scoped review request");
 
     let expected = ReviewRequest {
-        target: ReviewTarget::Custom {
-            instructions: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.\n\nAdditional review constraints:\n- Limit review findings to files under directory `src`.\n- Limit review findings to these paths: `src/lib.rs`.\n".to_string(),
-        },
+        target: ReviewTarget::UncommittedChanges,
         user_facing_hint: None,
+        supplemental_instructions: None,
+        pathspecs: vec!["src".to_string(), "src/lib.rs".to_string()],
     };
 
     assert_eq!(request, expected);

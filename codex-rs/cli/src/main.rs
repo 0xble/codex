@@ -1187,7 +1187,7 @@ async fn cli_main(
             exec_cli.color = review_cli.color;
             exec_cli.config_overrides = review_cli.config_overrides;
             exec_cli.psp = psp;
-            exec_cli.command = Some(ExecCommand::Review(review_cli.args));
+            exec_cli.command = Some(ExecCommand::Review(Box::new(review_cli.args)));
             exec_cli.strict_config = review_cli.strict_config || root_strict_config;
             prepend_config_flags(
                 &mut exec_cli.config_overrides,

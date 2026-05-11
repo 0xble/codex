@@ -17,6 +17,12 @@ v2_enum_from_core!(
 pub struct ReviewStartParams {
     pub thread_id: String,
     pub target: ReviewTarget,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub supplemental_instructions: Option<String>,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub pathspecs: Option<Vec<String>>,
 
     /// Where to run the review: inline (default) on the current thread or
     /// detached on a new thread (returned in `reviewThreadId`).

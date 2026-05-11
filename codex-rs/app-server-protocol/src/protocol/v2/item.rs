@@ -388,6 +388,9 @@ pub enum ThreadItem {
     ExitedReviewMode {
         id: String,
         review: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        review_output: Option<JsonValue>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
