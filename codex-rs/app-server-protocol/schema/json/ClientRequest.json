@@ -3808,6 +3808,13 @@
             "null"
           ]
         },
+        "sessionIdOverride": {
+          "description": "Optional caller-supplied thread/session id. Fork-only hidden CLI wrappers use this to keep their external session id aligned with Codex's thread id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "sessionStartSource": {
           "anyOf": [
             {

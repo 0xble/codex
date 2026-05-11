@@ -182,6 +182,7 @@ pub struct StartThreadOptions {
     pub metrics_service_name: Option<String>,
     pub parent_trace: Option<W3cTraceContext>,
     pub environments: Vec<TurnEnvironmentSelection>,
+    pub session_id_override: Option<String>,
 }
 
 pub(crate) struct ResumeThreadWithHistoryOptions {
@@ -574,6 +575,7 @@ impl ThreadManager {
             metrics_service_name: None,
             parent_trace: None,
             environments,
+            session_id_override: None,
         }))
         .await
     }
@@ -602,6 +604,7 @@ impl ThreadManager {
             /*inherited_exec_policy*/ None,
             options.parent_trace,
             options.environments,
+            options.session_id_override,
             /*user_shell_override*/ None,
         ))
         .await
@@ -679,6 +682,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             parent_trace,
             environments,
+            /*session_id_override*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -704,6 +708,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
             environments,
+            /*session_id_override*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
@@ -733,6 +738,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
             environments,
+            /*session_id_override*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
@@ -893,6 +899,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             parent_trace,
             environments,
+            /*session_id_override*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -1039,6 +1046,7 @@ impl ThreadManagerState {
             inherited_exec_policy,
             /*parent_trace*/ None,
             environments,
+            /*session_id_override*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -1073,6 +1081,7 @@ impl ThreadManagerState {
             inherited_exec_policy,
             /*parent_trace*/ None,
             environments,
+            /*session_id_override*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -1108,6 +1117,7 @@ impl ThreadManagerState {
             inherited_exec_policy,
             /*parent_trace*/ None,
             environments,
+            /*session_id_override*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -1127,6 +1137,7 @@ impl ThreadManagerState {
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
+        session_id_override: Option<String>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
@@ -1143,6 +1154,7 @@ impl ThreadManagerState {
             /*inherited_exec_policy*/ None,
             parent_trace,
             environments,
+            session_id_override,
             user_shell_override,
         ))
         .await
@@ -1164,6 +1176,7 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
+        session_id_override: Option<String>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
@@ -1188,6 +1201,8 @@ impl ThreadManagerState {
                 threads.remove(&resumed.conversation_id);
             }
         }
+        self.reject_duplicate_session_id_override(&initial_history, session_id_override.as_deref())
+            .await?;
         let environment_selections =
             resolve_environment_selections(self.environment_manager.as_ref(), &environments)?;
         let parent_rollout_thread_trace = self
@@ -1222,6 +1237,7 @@ impl ThreadManagerState {
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),
             attestation_provider: self.attestation_provider.clone(),
+            session_id_override,
         })
         .await?;
         let new_thread = self
@@ -1234,6 +1250,43 @@ impl ThreadManagerState {
             }
         }
         Ok(new_thread)
+    }
+
+    async fn reject_duplicate_session_id_override(
+        &self,
+        initial_history: &InitialHistory,
+        session_id_override: Option<&str>,
+    ) -> CodexResult<()> {
+        if matches!(initial_history, InitialHistory::Resumed(_)) {
+            return Ok(());
+        }
+        let Some(session_id_override) = session_id_override else {
+            return Ok(());
+        };
+        let thread_id = ThreadId::from_string(session_id_override).map_err(|err| {
+            CodexErr::InvalidRequest(format!(
+                "invalid session id override `{session_id_override}`: {err}"
+            ))
+        })?;
+        if self.threads.read().await.contains_key(&thread_id) {
+            return Err(CodexErr::InvalidRequest(format!(
+                "session id override `{thread_id}` is already in use"
+            )));
+        }
+        match self
+            .read_stored_thread(ReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: false,
+            })
+            .await
+        {
+            Ok(_) => Err(CodexErr::InvalidRequest(format!(
+                "session id override `{thread_id}` already exists"
+            ))),
+            Err(CodexErr::ThreadNotFound(_)) => Ok(()),
+            Err(err) => Err(err),
+        }
     }
 
     async fn finalize_thread_spawn(

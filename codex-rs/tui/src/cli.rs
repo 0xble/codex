@@ -54,6 +54,10 @@ pub struct Cli {
     #[clap(skip)]
     pub fork_show_all: bool,
 
+    /// Internal: override the generated session/thread id for wrapper-managed sessions.
+    #[arg(long = "session-id", value_name = "UUID", hide = true)]
+    pub session_id_override: Option<String>,
+
     #[clap(flatten)]
     pub shared: TuiSharedCliOptions,
 

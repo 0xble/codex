@@ -139,6 +139,10 @@ pub struct ThreadStartParams {
     pub ephemeral: Option<bool>,
     #[ts(optional = nullable)]
     pub session_start_source: Option<ThreadStartSource>,
+    /// Optional caller-supplied thread/session id. Fork-only hidden CLI wrappers
+    /// use this to keep their external session id aligned with Codex's thread id.
+    #[ts(optional = nullable)]
+    pub session_id_override: Option<String>,
     /// Optional client-supplied analytics source classification for this thread.
     #[ts(optional = nullable)]
     pub thread_source: Option<ThreadSource>,

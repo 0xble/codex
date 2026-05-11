@@ -198,8 +198,6 @@ mod updates;
 mod version;
 #[cfg(not(target_os = "linux"))]
 mod voice;
-mod width;
-mod workspace_command;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 mod voice {
@@ -257,6 +255,8 @@ mod voice {
         pub(crate) fn clear(&self) {}
     }
 }
+mod width;
+mod workspace_command;
 
 mod wrapping;
 
@@ -1673,6 +1673,7 @@ async fn run_ratatui_app(
         prompt,
         shared,
         no_alt_screen,
+        session_id_override,
         ..
     } = cli;
     let images = shared.into_inner().images;
@@ -1730,6 +1731,7 @@ async fn run_ratatui_app(
         should_show_trust_screen_flag, // Preserve the startup-time trust NUX signal before onboarding
         should_prompt_windows_sandbox_nux_at_startup,
         app_server_target,
+        session_id_override,
         state_db,
         environment_manager,
         startup_hooks_browser,

@@ -838,6 +838,7 @@ impl ThreadRequestProcessor {
             personality,
             ephemeral,
             session_start_source,
+            session_id_override,
             thread_source,
             environments,
             persist_extended_history,
@@ -893,6 +894,7 @@ impl ThreadRequestProcessor {
                 typesafe_overrides,
                 dynamic_tools,
                 session_start_source,
+                session_id_override,
                 thread_source.map(Into::into),
                 environment_selections,
                 service_name,
@@ -977,6 +979,7 @@ impl ThreadRequestProcessor {
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
         session_start_source: Option<codex_app_server_protocol::ThreadStartSource>,
+        session_id_override: Option<String>,
         thread_source: Option<codex_protocol::protocol::ThreadSource>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
         service_name: Option<String>,
@@ -1101,6 +1104,7 @@ impl ThreadRequestProcessor {
                 metrics_service_name: service_name,
                 parent_trace: request_trace,
                 environments,
+                session_id_override,
             })
             .instrument(tracing::info_span!(
                 "app_server.thread_start.create_thread",

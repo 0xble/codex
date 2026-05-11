@@ -416,6 +416,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
+    pub(crate) session_id_override: Option<String>,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -476,6 +477,7 @@ impl Codex {
             analytics_events_client,
             thread_store,
             attestation_provider,
+            session_id_override,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -649,6 +651,7 @@ impl Codex {
             thread_store,
             parent_rollout_thread_trace,
             attestation_provider,
+            session_id_override,
         )
         .await
         .map_err(|e| {

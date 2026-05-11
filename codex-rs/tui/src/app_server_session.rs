@@ -367,6 +367,29 @@ impl AppServerSession {
             .await
     }
 
+    pub(crate) async fn start_thread_with_id_override(
+        &mut self,
+        config: &Config,
+        session_id_override: Option<String>,
+    ) -> Result<AppServerStartedThread> {
+        let request_id = self.next_request_id();
+        let mut params = thread_start_params_from_config(
+            config,
+            self.thread_params_mode(),
+            self.remote_cwd_override.as_deref(),
+            /*session_start_source*/ None,
+        );
+        params.session_id_override = session_id_override;
+        let response: ThreadStartResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadStart { request_id, params })
+            .await
+            .map_err(|err| {
+                bootstrap_request_error("thread/start failed during TUI bootstrap", err)
+            })?;
+        started_thread_from_start_response(response, config, self.thread_params_mode()).await
+    }
+
     pub(crate) async fn start_thread_with_session_start_source(
         &mut self,
         config: &Config,
@@ -1094,18 +1117,21 @@ impl AppServerSession {
 pub(crate) async fn start_thread_with_request_handle(
     request_handle: AppServerRequestHandle,
     config: Config,
+    session_id_override: Option<String>,
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<PathBuf>,
 ) -> Result<AppServerStartedThread> {
+    let mut params = thread_start_params_from_config(
+        &config,
+        thread_params_mode,
+        remote_cwd_override.as_deref(),
+        /*session_start_source*/ None,
+    );
+    params.session_id_override = session_id_override;
     let response: ThreadStartResponse = request_handle
         .request_typed(ClientRequest::ThreadStart {
             request_id: RequestId::String(format!("startup-thread-start-{}", Uuid::new_v4())),
-            params: thread_start_params_from_config(
-                &config,
-                thread_params_mode,
-                remote_cwd_override.as_deref(),
-                /*session_start_source*/ None,
-            ),
+            params,
         })
         .await
         .map_err(|err| bootstrap_request_error("thread/start failed during TUI bootstrap", err))?;

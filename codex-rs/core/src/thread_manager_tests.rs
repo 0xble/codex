@@ -334,6 +334,7 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
                 environment_id: "local".to_string(),
                 cwd: config.cwd.clone(),
             }],
+            session_id_override: None,
         })
         .await;
     let err = match result {
@@ -343,6 +344,111 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
 
     assert_eq!(err.to_string(), "unknown turn environment id `local`");
     assert!(manager.list_thread_ids().await.is_empty());
+}
+
+#[tokio::test]
+async fn start_thread_with_options_uses_session_id_override_for_new_threads() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let session_id_override = "00000000-0000-0000-0000-000000000001".to_string();
+    let expected_thread_id =
+        codex_protocol::ThreadId::from_string(&session_id_override).expect("thread id");
+
+    let thread = manager
+        .start_thread_with_options(StartThreadOptions {
+            config,
+            initial_history: InitialHistory::New,
+            session_source: None,
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            persist_extended_history: false,
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: Vec::new(),
+            session_id_override: Some(session_id_override),
+        })
+        .await
+        .expect("thread should start");
+
+    assert_eq!(thread.thread_id, expected_thread_id);
+    assert!(manager.get_thread(thread.thread_id).await.is_ok());
+}
+
+#[tokio::test]
+async fn start_thread_with_options_rejects_reused_session_id_override() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let session_id_override = "00000000-0000-0000-0000-000000000001".to_string();
+    let first = manager
+        .start_thread_with_options(StartThreadOptions {
+            config: config.clone(),
+            initial_history: InitialHistory::New,
+            session_source: None,
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            persist_extended_history: false,
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: Vec::new(),
+            session_id_override: Some(session_id_override.clone()),
+        })
+        .await
+        .expect("first thread should start");
+    first.thread.ensure_rollout_materialized().await;
+    first
+        .thread
+        .flush_rollout()
+        .await
+        .expect("flush first thread");
+    first
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown first thread");
+    let _ = manager.remove_thread(&first.thread_id).await;
+
+    let duplicate = manager
+        .start_thread_with_options(StartThreadOptions {
+            config,
+            initial_history: InitialHistory::New,
+            session_source: None,
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            persist_extended_history: false,
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: Vec::new(),
+            session_id_override: Some(session_id_override),
+        })
+        .await;
+
+    let err = match duplicate {
+        Ok(_) => panic!("duplicate override should fail"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(err, codex_protocol::error::CodexErr::InvalidRequest(message) if message.contains("already exists"))
+    );
 }
 
 #[tokio::test]
@@ -465,6 +571,7 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
             metrics_service_name: None,
             parent_trace: None,
             environments: Vec::new(),
+            session_id_override: None,
         })
         .await
         .expect("internal thread should start");
@@ -521,6 +628,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             metrics_service_name: None,
             parent_trace: None,
             environments: environments.clone(),
+            session_id_override: None,
         })
         .await
         .expect("start source thread");
@@ -793,6 +901,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             metrics_service_name: None,
             parent_trace: None,
             environments: Vec::new(),
+            session_id_override: None,
         })
         .await
         .expect("start source thread");
