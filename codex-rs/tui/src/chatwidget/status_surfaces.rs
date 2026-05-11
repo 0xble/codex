@@ -657,6 +657,18 @@ impl ChatWidget {
             StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
             StatusLineItem::ModelWithReasoning => Some(self.model_with_reasoning_display_name()),
             StatusLineItem::Reasoning => Some(self.reasoning_display_name()),
+            StatusLineItem::Account => {
+                self.status_account_display
+                    .as_ref()
+                    .map(|account| match account {
+                        StatusAccountDisplay::ChatGpt { email, plan } => match (email, plan) {
+                            (Some(email), _) => email.clone(),
+                            (None, Some(plan)) => plan.clone(),
+                            (None, None) => "ChatGPT".to_string(),
+                        },
+                        StatusAccountDisplay::ApiKey => "API key".to_string(),
+                    })
+            }
             StatusLineItem::CurrentDir => {
                 Some(format_directory_display(
                     self.status_line_cwd(),
@@ -792,6 +804,7 @@ impl ChatWidget {
             StatusSurfacePreviewItem::Model => StatusLineItem::ModelName,
             StatusSurfacePreviewItem::ModelWithReasoning => StatusLineItem::ModelWithReasoning,
             StatusSurfacePreviewItem::Reasoning => StatusLineItem::Reasoning,
+            StatusSurfacePreviewItem::Account => StatusLineItem::Account,
         };
         self.status_line_value_for_item(status_line_item)
     }
