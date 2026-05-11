@@ -1672,6 +1672,7 @@ async fn run_ratatui_app(
         prompt,
         shared,
         no_alt_screen,
+        session_id_override,
         ..
     } = cli;
     let images = shared.into_inner().images;
@@ -1752,6 +1753,7 @@ async fn run_ratatui_app(
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
         should_prompt_windows_sandbox_nux_at_startup,
         app_server_target,
+        session_id_override,
         state_db,
         environment_manager,
         startup_elapsed_before_app,

@@ -446,6 +446,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
     pub(crate) external_time_provider: Option<Arc<dyn TimeProvider>>,
     pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
+    pub(crate) session_id_override: Option<String>,
 }
 
 pub(crate) fn resolve_multi_agent_version(
@@ -534,6 +535,7 @@ impl Codex {
             attestation_provider,
             external_time_provider,
             inherited_multi_agent_version,
+            session_id_override,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -708,6 +710,7 @@ impl Codex {
             attestation_provider,
             external_time_provider,
             multi_agent_version,
+            session_id_override,
         ))
         .await
         .map_err(|e| {

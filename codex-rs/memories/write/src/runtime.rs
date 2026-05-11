@@ -344,6 +344,7 @@ impl MemoryStartupContext {
                 environments,
                 thread_extension_init: Default::default(),
                 supports_openai_form_elicitation: false,
+                session_id_override: None,
             })
             .await?;
 

@@ -197,6 +197,7 @@ pub struct StartThreadOptions {
     pub environments: Vec<TurnEnvironmentSelection>,
     pub thread_extension_init: ExtensionDataInit,
     pub supports_openai_form_elicitation: bool,
+    pub session_id_override: Option<String>,
 }
 
 fn originator_from_service_name(service_name: Option<&str>) -> Option<String> {
@@ -672,6 +673,7 @@ impl ThreadManager {
             environments,
             thread_extension_init: ExtensionDataInit::default(),
             supports_openai_form_elicitation: false,
+            session_id_override: None,
         }))
         .await
     }
@@ -715,6 +717,7 @@ impl ThreadManager {
             options.environments,
             options.thread_extension_init,
             options.supports_openai_form_elicitation,
+            options.session_id_override,
             /*user_shell_override*/ None,
         ))
         .await
@@ -812,6 +815,7 @@ impl ThreadManager {
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
+            /*session_id_override*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -842,6 +846,7 @@ impl ThreadManager {
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
+            /*session_id_override*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
@@ -883,6 +888,7 @@ impl ThreadManager {
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
+            /*session_id_override*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
@@ -1064,6 +1070,7 @@ impl ThreadManager {
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
+            /*session_id_override*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -1385,6 +1392,7 @@ impl ThreadManagerState {
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
             /*supports_openai_form_elicitation*/ false,
+            /*session_id_override*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -1425,6 +1433,7 @@ impl ThreadManagerState {
             environments,
             /*thread_extension_init*/ ExtensionDataInit::default(),
             /*supports_openai_form_elicitation*/ false,
+            /*session_id_override*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -1467,6 +1476,7 @@ impl ThreadManagerState {
             environments,
             thread_extension_init,
             /*supports_openai_form_elicitation*/ false,
+            /*session_id_override*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -1489,6 +1499,7 @@ impl ThreadManagerState {
         environments: Vec<TurnEnvironmentSelection>,
         thread_extension_init: ExtensionDataInit,
         supports_openai_form_elicitation: bool,
+        session_id_override: Option<String>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
@@ -1510,6 +1521,7 @@ impl ThreadManagerState {
             environments,
             thread_extension_init,
             supports_openai_form_elicitation,
+            session_id_override,
             user_shell_override,
         ))
         .await
@@ -1536,6 +1548,7 @@ impl ThreadManagerState {
         environments: Vec<TurnEnvironmentSelection>,
         thread_extension_init: ExtensionDataInit,
         supports_openai_form_elicitation: bool,
+        session_id_override: Option<String>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
@@ -1560,6 +1573,8 @@ impl ThreadManagerState {
                 threads.remove(&resumed.conversation_id);
             }
         }
+        self.reject_duplicate_session_id_override(&initial_history, session_id_override.as_deref())
+            .await?;
         let user_instructions = self
             .user_instructions_for_spawn(&session_source, parent_thread_id, forked_from_thread_id)
             .await;
@@ -1622,6 +1637,7 @@ impl ThreadManagerState {
             attestation_provider: self.attestation_provider.clone(),
             external_time_provider: self.external_time_provider.clone(),
             inherited_multi_agent_version: multi_agent_version,
+            session_id_override,
         }))
         .await?;
         let new_thread = self
@@ -1631,6 +1647,43 @@ impl ThreadManagerState {
             new_thread.thread.emit_thread_resume_lifecycle().await;
         }
         Ok(new_thread)
+    }
+
+    async fn reject_duplicate_session_id_override(
+        &self,
+        initial_history: &InitialHistory,
+        session_id_override: Option<&str>,
+    ) -> CodexResult<()> {
+        if matches!(initial_history, InitialHistory::Resumed(_)) {
+            return Ok(());
+        }
+        let Some(session_id_override) = session_id_override else {
+            return Ok(());
+        };
+        let thread_id = ThreadId::from_string(session_id_override).map_err(|err| {
+            CodexErr::InvalidRequest(format!(
+                "invalid session id override `{session_id_override}`: {err}"
+            ))
+        })?;
+        if self.threads.read().await.contains_key(&thread_id) {
+            return Err(CodexErr::InvalidRequest(format!(
+                "session id override `{thread_id}` is already in use"
+            )));
+        }
+        match self
+            .read_stored_thread(ReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: false,
+            })
+            .await
+        {
+            Ok(_) => Err(CodexErr::InvalidRequest(format!(
+                "session id override `{thread_id}` already exists"
+            ))),
+            Err(CodexErr::ThreadNotFound(_)) => Ok(()),
+            Err(err) => Err(err),
+        }
     }
 
     async fn finalize_thread_spawn(
