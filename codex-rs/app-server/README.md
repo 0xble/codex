@@ -858,6 +858,8 @@ Use `review/start` to run Codex’s reviewer on the currently checked-out projec
 - `{"type":"baseBranch","branch":"main"}` — diff against the provided branch’s upstream (see prompt for the exact `git merge-base`/`git diff` instructions Codex will run).
 - `{"type":"commit","sha":"abc1234","title":"Optional subject"}` — review a specific commit.
 - `{"type":"custom","instructions":"Free-form reviewer instructions"}` — fallback prompt equivalent to the legacy manual review request.
+- `pathspecs` — optional list of paths the reviewer should focus on.
+- `supplementalInstructions` — optional extra reviewer lens combined with the target prompt.
 - `delivery` (`"inline"` or `"detached"`, default `"inline"`) — where the review runs:
   - `"inline"`: run the review as a new turn on the existing thread. The response’s `reviewThreadId` equals the original `threadId`, and no new `thread/started` notification is emitted.
   - `"detached"`: fork a new review thread from the parent conversation and run the review there. The response’s `reviewThreadId` is the id of this new review thread, and the server emits a `thread/started` notification for it before streaming review items.
@@ -868,7 +870,9 @@ Example request/response:
 { "method": "review/start", "id": 40, "params": {
     "threadId": "thr_123",
     "delivery": "inline",
-    "target": { "type": "commit", "sha": "1234567deadbeef", "title": "Polish tui colors" }
+    "target": { "type": "commit", "sha": "1234567deadbeef", "title": "Polish tui colors" },
+    "pathspecs": ["codex-rs/tui/src"],
+    "supplementalInstructions": "Focus on regressions in terminal rendering."
 } }
 { "id": 40, "result": {
     "turn": {
