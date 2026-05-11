@@ -1002,6 +1002,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::ExitedReviewMode(review_event) => {
+            let review_output = review_event.review_output.as_ref().and_then(|output| {
+                serde_json::to_value(output)
+                    .inspect_err(|err| tracing::warn!("failed to serialize review output: {err}"))
+                    .ok()
+            });
             let review = match review_event.review_output {
                 Some(output) => render_review_output_text(&output),
                 None => REVIEW_FALLBACK_MESSAGE.to_string(),
@@ -1009,6 +1014,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let item = ThreadItem::ExitedReviewMode {
                 id: event_turn_id.clone(),
                 review,
+                review_output,
             };
             let started = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),

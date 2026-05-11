@@ -585,6 +585,7 @@ pub(super) fn handle_exited_review_mode(chat: &mut ChatWidget) {
             item: AppServerThreadItem::ExitedReviewMode {
                 id: "review-end".to_string(),
                 review: String::new(),
+                review_output: None,
             },
         }),
         /*replay_kind*/ None,

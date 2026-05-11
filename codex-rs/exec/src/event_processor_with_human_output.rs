@@ -32,6 +32,8 @@ pub(crate) struct EventProcessorWithHumanOutput {
     show_agent_reasoning: bool,
     show_raw_agent_reasoning: bool,
     last_message_path: Option<PathBuf>,
+    review_output_path: Option<PathBuf>,
+    review_item: Option<serde_json::Value>,
     final_message: Option<String>,
     final_message_rendered: bool,
     emit_final_message_on_shutdown: bool,
@@ -43,6 +45,7 @@ impl EventProcessorWithHumanOutput {
         with_ansi: bool,
         config: &Config,
         last_message_path: Option<PathBuf>,
+        review_output_path: Option<PathBuf>,
     ) -> Self {
         let style = |styled: Style, plain: Style| if with_ansi { styled } else { plain };
         Self {
@@ -57,6 +60,8 @@ impl EventProcessorWithHumanOutput {
             show_agent_reasoning: !config.hide_agent_reasoning,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             last_message_path,
+            review_output_path,
+            review_item: None,
             final_message: None,
             final_message_rendered: false,
             emit_final_message_on_shutdown: false,
@@ -105,6 +110,18 @@ impl EventProcessorWithHumanOutput {
                 );
                 self.final_message = Some(text);
                 self.final_message_rendered = true;
+            }
+            ThreadItem::ExitedReviewMode {
+                review,
+                review_output,
+                ..
+            } => {
+                self.final_message = Some(review.clone());
+                self.review_item = Some(serde_json::json!({
+                    "status": if review_output.is_some() { "completed" } else { "interrupted" },
+                    "text": review,
+                    "output": review_output,
+                }));
             }
             ThreadItem::Reasoning {
                 summary, content, ..
@@ -310,6 +327,11 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                             rendered_message.as_deref() == Some(final_message.as_str());
                         self.final_message = Some(final_message);
                     }
+                    if let Some(review_item) =
+                        review_item_from_turn_items(notification.turn.items.as_slice())
+                    {
+                        self.review_item = Some(review_item);
+                    }
                     self.emit_final_message_on_shutdown = true;
                     CodexStatus::InitiateShutdown
                 }
@@ -379,6 +401,15 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         {
             handle_last_message(self.final_message.as_deref(), path);
         }
+        if let Some(path) = self.review_output_path.as_deref()
+            && let Some(review_item) = self.review_item.as_ref()
+            && let Err(err) = std::fs::write(
+                path,
+                serde_json::to_string_pretty(review_item).unwrap_or_else(|_| "{}".to_string()),
+            )
+        {
+            eprintln!("Failed to write review output file {path:?}: {err}");
+        }
 
         if let Some(usage) = &self.last_total_token_usage {
             eprintln!(
@@ -413,6 +444,23 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 message
             );
         }
+    }
+
+    fn review_has_findings(&self) -> bool {
+        self.review_item
+            .as_ref()
+            .and_then(|review_item| review_item.get("output"))
+            .and_then(|output| output.get("findings"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|findings| !findings.is_empty())
+    }
+
+    fn mark_review_timed_out(&mut self, message: String) {
+        self.review_item = Some(serde_json::json!({
+            "status": "timed_out",
+            "text": message,
+            "output": null,
+        }));
     }
 }
 
@@ -496,6 +544,21 @@ fn final_message_from_turn_items(items: &[ThreadItem]) -> Option<String> {
                 _ => None,
             })
         })
+}
+
+fn review_item_from_turn_items(items: &[ThreadItem]) -> Option<serde_json::Value> {
+    items.iter().rev().find_map(|item| match item {
+        ThreadItem::ExitedReviewMode {
+            review,
+            review_output,
+            ..
+        } => Some(serde_json::json!({
+            "status": if review_output.is_some() { "completed" } else { "interrupted" },
+            "text": review,
+            "output": review_output,
+        })),
+        _ => None,
+    })
 }
 
 fn blended_total(usage: &ThreadTokenUsage) -> i64 {

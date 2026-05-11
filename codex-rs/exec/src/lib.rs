@@ -123,6 +123,8 @@ pub use exec_events::McpToolCallStatus;
 pub use exec_events::PatchApplyStatus;
 pub use exec_events::PatchChangeKind;
 pub use exec_events::ReasoningItem;
+pub use exec_events::ReviewItem;
+pub use exec_events::ReviewStatus;
 pub use exec_events::ThreadErrorEvent;
 pub use exec_events::ThreadEvent;
 pub use exec_events::ThreadItem as ExecThreadItem;
@@ -158,6 +160,7 @@ use crate::event_processor::EventProcessor;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
 const EXEC_DEFAULT_LOG_FILTER: &str = "error,opentelemetry_sdk=off,opentelemetry_otlp=off";
+const CODEX_REVIEW_MODE_ENV_VAR: &str = "CODEX_REVIEW_MODE";
 
 enum InitialOperation {
     UserTurn {
@@ -207,6 +210,9 @@ struct ExecRunArgs {
     images: Vec<PathBuf>,
     json_mode: bool,
     last_message_file: Option<PathBuf>,
+    review_output_file: Option<PathBuf>,
+    fail_on_findings: bool,
+    review_timeout_ms: Option<u64>,
     model_provider: Option<String>,
     oss: bool,
     output_schema_path: Option<PathBuf>,
@@ -258,6 +264,23 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         output_schema: output_schema_path,
         config_overrides,
     } = cli;
+    let review_output_file = match command.as_ref() {
+        Some(ExecCommand::Review(args)) => args.output_review_json.clone(),
+        _ => None,
+    };
+    let fail_on_findings = matches!(
+        command.as_ref(),
+        Some(ExecCommand::Review(args)) if args.fail_on_findings
+    );
+    let review_timeout_ms = match command.as_ref() {
+        Some(ExecCommand::Review(args)) => args.timeout_ms,
+        _ => None,
+    };
+    if matches!(command.as_ref(), Some(ExecCommand::Review(_)))
+        && std::env::var_os(CODEX_REVIEW_MODE_ENV_VAR).is_some()
+    {
+        anyhow::bail!("nested codex review is disabled while a review is already running");
+    }
     let shared = shared.into_inner();
     let SharedCliOptions {
         images,
@@ -559,6 +582,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         images,
         json_mode,
         last_message_file,
+        review_output_file,
+        fail_on_findings,
+        review_timeout_ms,
         model_provider,
         oss,
         output_schema_path,
@@ -581,6 +607,9 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         images,
         json_mode,
         last_message_file,
+        review_output_file,
+        fail_on_findings,
+        review_timeout_ms,
         model_provider,
         oss,
         output_schema_path,
@@ -590,11 +619,15 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     } = args;
 
     let mut event_processor: Box<dyn EventProcessor> = match json_mode {
-        true => Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone())),
+        true => Box::new(EventProcessorWithJsonOutput::new_with_review_output_path(
+            last_message_file.clone(),
+            review_output_file.clone(),
+        )),
         _ => Box::new(EventProcessorWithHumanOutput::create_with_ansi(
             stderr_with_ansi,
             &config,
             last_message_file.clone(),
+            review_output_file.clone(),
         )),
     };
     if oss {
@@ -816,6 +849,9 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             task_id
         }
         InitialOperation::Review { review_request } => {
+            let supplemental_instructions = review_request.supplemental_instructions.clone();
+            let pathspecs =
+                (!review_request.pathspecs.is_empty()).then(|| review_request.pathspecs.clone());
             let response: ReviewStartResponse = send_request_with_response(
                 &client,
                 ClientRequest::ReviewStart {
@@ -823,6 +859,8 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     params: ReviewStartParams {
                         thread_id: primary_thread_id_for_span.clone(),
                         target: review_target_to_api(review_request.target),
+                        supplemental_instructions,
+                        pathspecs,
                         delivery: None,
                     },
                 },
@@ -848,9 +886,41 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
     let mut interrupt_channel_open = true;
+    let mut review_timeout_deadline = review_timeout_ms.map(|timeout_ms| {
+        tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms)
+    });
+    let mut review_timed_out = false;
     let primary_thread_id_for_requests = primary_thread_id.to_string();
     loop {
         let server_event = tokio::select! {
+            _ = async {
+                if let Some(deadline) = review_timeout_deadline {
+                    tokio::time::sleep_until(deadline).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            }, if review_timeout_deadline.is_some() => {
+                review_timeout_deadline = None;
+                review_timed_out = true;
+                let message = format!("review timed out after {}ms", review_timeout_ms.unwrap_or_default());
+                event_processor.process_warning(message);
+                if let Err(err) = send_request_with_response::<TurnInterruptResponse>(
+                    &client,
+                    ClientRequest::TurnInterrupt {
+                        request_id: request_ids.next(),
+                        params: TurnInterruptParams {
+                            thread_id: primary_thread_id_for_requests.clone(),
+                            turn_id: task_id.clone(),
+                        },
+                    },
+                    "turn/interrupt",
+                )
+                .await
+                {
+                    warn!("turn/interrupt failed after review timeout: {err}");
+                }
+                continue;
+            }
             maybe_interrupt = interrupt_rx.recv(), if interrupt_channel_open => {
                 if maybe_interrupt.is_none() {
                     interrupt_channel_open = false;
@@ -945,7 +1015,17 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     if let Err(err) = client.shutdown().await {
         warn!("in-process app-server shutdown failed: {err}");
     }
+    if review_timed_out {
+        event_processor.mark_review_timed_out(format!(
+            "Review timed out after {}ms.",
+            review_timeout_ms.unwrap_or_default()
+        ));
+        error_seen = true;
+    }
     event_processor.print_final_output();
+    if fail_on_findings && event_processor.review_has_findings() {
+        std::process::exit(1);
+    }
     if error_seen {
         std::process::exit(1);
     }
@@ -1860,78 +1940,69 @@ fn resolve_root_prompt(prompt_arg: Option<String>) -> String {
 }
 
 fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
+    let mut supplemental_instructions = review_supplemental_instructions(args)?;
+    let pathspecs = review_pathspecs(args)?;
     if let Some(base_commit) = &args.base_commit {
+        if let Some(prompt_arg) = args.prompt.clone() {
+            let prompt = resolve_prompt(Some(prompt_arg)).trim().to_string();
+            if prompt.is_empty() {
+                anyhow::bail!("Review prompt cannot be empty");
+            }
+            supplemental_instructions = append_optional_section(supplemental_instructions, prompt);
+        }
         let prompt = format!(
             "Review the code changes since base commit {base_commit}. Run `git diff {base_commit}..HEAD` to inspect the committed range, and include working tree changes only if they touch the requested scope. Provide prioritized, actionable findings."
         );
         return Ok(ReviewRequest {
             target: ReviewTarget::Custom {
-                instructions: scoped_review_prompt(prompt, args),
+                instructions: prompt,
             },
             user_facing_hint: None,
+            supplemental_instructions,
+            pathspecs,
         });
     }
 
-    let has_scope_modifiers = !args.files.is_empty() || args.dir.is_some();
-    let (target, prompt) = if args.uncommitted {
-        (
-            ReviewTarget::UncommittedChanges,
-            "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
-        )
+    let has_native_target = args.uncommitted || args.base.is_some() || args.commit.is_some();
+    let target = if args.uncommitted {
+        ReviewTarget::UncommittedChanges
     } else if let Some(branch) = args.base.clone() {
-        (
-            ReviewTarget::BaseBranch {
-                branch: branch.clone(),
-            },
-            format!(
-                "Review the code changes against the base branch '{branch}'. Start by finding the merge base between HEAD and '{branch}', then run `git diff <merge-base>` to inspect the changes relative to that base. Provide prioritized, actionable findings."
-            ),
-        )
+        ReviewTarget::BaseBranch { branch }
     } else if let Some(sha) = args.commit.clone() {
-        let prompt = if let Some(title) = args.commit_title.clone() {
-            format!(
-                "Review the code changes introduced by commit {sha} (\"{title}\"). Provide prioritized, actionable findings."
-            )
-        } else {
-            format!(
-                "Review the code changes introduced by commit {sha}. Provide prioritized, actionable findings."
-            )
-        };
-        (
-            ReviewTarget::Commit {
-                sha,
-                title: args.commit_title.clone(),
-            },
-            prompt,
-        )
+        ReviewTarget::Commit {
+            sha,
+            title: args.commit_title.clone(),
+        }
     } else if let Some(prompt_arg) = args.prompt.clone() {
         let prompt = resolve_prompt(Some(prompt_arg)).trim().to_string();
         if prompt.is_empty() {
             anyhow::bail!("Review prompt cannot be empty");
         }
-        (
-            ReviewTarget::Custom {
-                instructions: prompt.clone(),
-            },
-            prompt,
-        )
+        ReviewTarget::Custom {
+            instructions: prompt,
+        }
     } else {
         anyhow::bail!(
             "Specify --uncommitted, --base, --base-commit, --commit, or provide custom review instructions"
         );
     };
 
-    let target = if has_scope_modifiers {
-        ReviewTarget::Custom {
-            instructions: scoped_review_prompt(prompt, args),
-        }
-    } else {
-        target
-    };
+    let supplemental_instructions =
+        if has_native_target && let Some(prompt_arg) = args.prompt.clone() {
+            let prompt = resolve_prompt(Some(prompt_arg)).trim().to_string();
+            if prompt.is_empty() {
+                anyhow::bail!("Review prompt cannot be empty");
+            }
+            append_optional_section(supplemental_instructions, prompt)
+        } else {
+            supplemental_instructions
+        };
 
     Ok(ReviewRequest {
         target,
         user_facing_hint: None,
+        supplemental_instructions,
+        pathspecs,
     })
 }
 
@@ -1943,37 +2014,71 @@ fn reject_review_images(images: &[PathBuf]) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn scoped_review_prompt(base_prompt: String, args: &ReviewArgs) -> String {
-    let mut prompt = base_prompt;
-    let mut constraints = Vec::new();
-
+fn review_pathspecs(args: &ReviewArgs) -> anyhow::Result<Vec<String>> {
+    let mut pathspecs = Vec::new();
     if let Some(dir) = &args.dir {
-        constraints.push(format!(
-            "Limit review findings to files under directory `{}`.",
-            dir.display()
-        ));
+        pathspecs.push(dir.display().to_string());
     }
 
-    if !args.files.is_empty() {
-        let paths = args
-            .files
-            .iter()
-            .map(|path| format!("`{}`", path.display()))
-            .collect::<Vec<_>>()
-            .join(", ");
-        constraints.push(format!("Limit review findings to these paths: {paths}."));
-    }
+    pathspecs.extend(args.files.iter().map(|path| path.display().to_string()));
 
-    if !constraints.is_empty() {
-        prompt.push_str("\n\nAdditional review constraints:\n");
-        for constraint in constraints {
-            prompt.push_str("- ");
-            prompt.push_str(&constraint);
-            prompt.push('\n');
+    if let Some(pathspec_from_file) = &args.pathspec_from_file {
+        let file = std::fs::read_to_string(pathspec_from_file).map_err(|err| {
+            anyhow::anyhow!(
+                "failed to read pathspec file {}: {err}",
+                pathspec_from_file.display()
+            )
+        })?;
+        let file_pathspecs = file
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        if file_pathspecs.is_empty() {
+            anyhow::bail!("pathspec file {} is empty", pathspec_from_file.display());
         }
+        pathspecs.extend(file_pathspecs);
     }
 
-    prompt
+    if pathspecs.iter().any(|pathspec| pathspec.trim().is_empty()) {
+        anyhow::bail!("review pathspecs must not be empty");
+    }
+
+    Ok(pathspecs)
+}
+
+fn review_supplemental_instructions(args: &ReviewArgs) -> anyhow::Result<Option<String>> {
+    let mut sections = Vec::new();
+    if let Some(instructions) = &args.instructions {
+        let trimmed = instructions.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!("instructions must not be empty");
+        }
+        sections.push(trimmed.to_string());
+    }
+    if let Some(instructions_file) = &args.instructions_file {
+        let instructions = std::fs::read_to_string(instructions_file).map_err(|err| {
+            anyhow::anyhow!(
+                "failed to read instructions file {}: {err}",
+                instructions_file.display()
+            )
+        })?;
+        let trimmed = instructions.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!("instructions file {} is empty", instructions_file.display());
+        }
+        sections.push(trimmed.to_string());
+    }
+
+    Ok((!sections.is_empty()).then(|| sections.join("\n\n")))
+}
+
+fn append_optional_section(existing: Option<String>, next: String) -> Option<String> {
+    Some(match existing {
+        Some(existing) if !existing.trim().is_empty() => format!("{existing}\n\n{next}"),
+        _ => next,
+    })
 }
 
 #[cfg(test)]

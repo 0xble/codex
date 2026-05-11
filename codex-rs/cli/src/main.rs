@@ -1000,7 +1000,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             exec_cli.color = review_cli.color;
             exec_cli.config_overrides = review_cli.config_overrides;
             exec_cli.strict_config = review_cli.strict_config || root_strict_config;
-            exec_cli.command = Some(ExecCommand::Review(review_cli.review));
+            exec_cli.command = Some(ExecCommand::Review(Box::new(review_cli.review)));
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),

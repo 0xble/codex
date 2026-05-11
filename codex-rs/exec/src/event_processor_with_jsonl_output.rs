@@ -42,6 +42,8 @@ use crate::exec_events::McpToolCallStatus as ExecMcpToolCallStatus;
 use crate::exec_events::PatchApplyStatus as ExecPatchApplyStatus;
 use crate::exec_events::PatchChangeKind as ExecPatchChangeKind;
 use crate::exec_events::ReasoningItem;
+use crate::exec_events::ReviewItem;
+use crate::exec_events::ReviewStatus;
 use crate::exec_events::ThreadErrorEvent;
 use crate::exec_events::ThreadEvent;
 use crate::exec_events::ThreadItem as ExecThreadItem;
@@ -63,6 +65,8 @@ pub struct EventProcessorWithJsonOutput {
     last_total_token_usage: Option<ThreadTokenUsage>,
     last_critical_error: Option<ThreadErrorEvent>,
     final_message: Option<String>,
+    review_item: Option<ReviewItem>,
+    review_output_path: Option<PathBuf>,
     emit_final_message_on_shutdown: bool,
 }
 
@@ -80,6 +84,13 @@ pub struct CollectedThreadEvents {
 
 impl EventProcessorWithJsonOutput {
     pub fn new(last_message_path: Option<PathBuf>) -> Self {
+        Self::new_with_review_output_path(last_message_path, /*review_output_path*/ None)
+    }
+
+    pub fn new_with_review_output_path(
+        last_message_path: Option<PathBuf>,
+        review_output_path: Option<PathBuf>,
+    ) -> Self {
         Self {
             last_message_path,
             next_item_id: AtomicU64::new(0),
@@ -88,12 +99,18 @@ impl EventProcessorWithJsonOutput {
             last_total_token_usage: None,
             last_critical_error: None,
             final_message: None,
+            review_item: None,
+            review_output_path,
             emit_final_message_on_shutdown: false,
         }
     }
 
     pub fn final_message(&self) -> Option<&str> {
         self.final_message.as_deref()
+    }
+
+    pub fn review_item(&self) -> Option<&ReviewItem> {
+        self.review_item.as_ref()
     }
 
     fn next_item_id(&self) -> String {
@@ -146,6 +163,22 @@ impl EventProcessorWithJsonOutput {
             ThreadItem::AgentMessage { text, .. } => Some(ExecThreadItem {
                 id: make_id(),
                 details: ThreadItemDetails::AgentMessage(AgentMessageItem { text }),
+            }),
+            ThreadItem::ExitedReviewMode {
+                review,
+                review_output,
+                ..
+            } => Some(ExecThreadItem {
+                id: make_id(),
+                details: ThreadItemDetails::Review(ReviewItem {
+                    status: if review_output.is_some() {
+                        ReviewStatus::Completed
+                    } else {
+                        ReviewStatus::Interrupted
+                    },
+                    text: review,
+                    output: review_output,
+                }),
             }),
             ThreadItem::Reasoning { summary, .. } => {
                 let text = summary.join("\n");
@@ -394,6 +427,25 @@ impl EventProcessorWithJsonOutput {
             })
     }
 
+    fn review_item_from_turn_items(items: &[ThreadItem]) -> Option<ReviewItem> {
+        items.iter().rev().find_map(|item| match item {
+            ThreadItem::ExitedReviewMode {
+                review,
+                review_output,
+                ..
+            } => Some(ReviewItem {
+                status: if review_output.is_some() {
+                    ReviewStatus::Completed
+                } else {
+                    ReviewStatus::Interrupted
+                },
+                text: review.clone(),
+                output: review_output.clone(),
+            }),
+            _ => None,
+        })
+    }
+
     pub fn thread_started_event(session_configured: &SessionConfiguredEvent) -> ThreadEvent {
         ThreadEvent::ThreadStarted(ThreadStartedEvent {
             thread_id: session_configured.thread_id.to_string(),
@@ -471,10 +523,15 @@ impl EventProcessorWithJsonOutput {
             }
             ServerNotification::ItemCompleted(notification) => {
                 if let Some(item) = self.map_completed_item_mut(notification.item) {
-                    if let ThreadItemDetails::AgentMessage(AgentMessageItem { text }) =
-                        &item.details
-                    {
-                        self.final_message = Some(text.clone());
+                    match &item.details {
+                        ThreadItemDetails::AgentMessage(AgentMessageItem { text }) => {
+                            self.final_message = Some(text.clone());
+                        }
+                        ThreadItemDetails::Review(review_item) => {
+                            self.final_message = Some(review_item.text.clone());
+                            self.review_item = Some(review_item.clone());
+                        }
+                        _ => {}
                     }
                     events.push(ThreadEvent::ItemCompleted(ItemCompletedEvent { item }));
                 }
@@ -517,6 +574,11 @@ impl EventProcessorWithJsonOutput {
                             Self::final_message_from_turn_items(notification.turn.items.as_slice())
                         {
                             self.final_message = Some(final_message);
+                        }
+                        if let Some(review_item) =
+                            Self::review_item_from_turn_items(notification.turn.items.as_slice())
+                        {
+                            self.review_item = Some(review_item);
                         }
                         self.emit_final_message_on_shutdown = true;
                         events.push(ThreadEvent::TurnCompleted(TurnCompletedEvent {
@@ -623,6 +685,39 @@ impl EventProcessor for EventProcessorWithJsonOutput {
         {
             handle_last_message(self.final_message.as_deref(), path);
         }
+        if let Some(path) = self.review_output_path.as_deref()
+            && let Some(review_item) = self.review_item.as_ref()
+            && let Err(err) = std::fs::write(
+                path,
+                serde_json::to_string_pretty(review_item).unwrap_or_else(|_| "{}".to_string()),
+            )
+        {
+            eprintln!("Failed to write review output file {path:?}: {err}");
+        }
+    }
+
+    fn review_has_findings(&self) -> bool {
+        self.review_item
+            .as_ref()
+            .and_then(|review_item| review_item.output.as_ref())
+            .and_then(|output| output.get("findings"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|findings| !findings.is_empty())
+    }
+
+    fn mark_review_timed_out(&mut self, message: String) {
+        let item = ExecThreadItem {
+            id: self.next_item_id(),
+            details: ThreadItemDetails::Review(ReviewItem {
+                status: ReviewStatus::TimedOut,
+                text: message,
+                output: None,
+            }),
+        };
+        if let ThreadItemDetails::Review(review_item) = &item.details {
+            self.review_item = Some(review_item.clone());
+        }
+        self.emit(ThreadEvent::ItemCompleted(ItemCompletedEvent { item }));
     }
 }
 

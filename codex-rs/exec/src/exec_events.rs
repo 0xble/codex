@@ -125,6 +125,8 @@ pub enum ThreadItemDetails {
     /// Tracks the agent's running to-do list. It starts when the plan is first
     /// issued, updates as steps change state, and completes when the turn ends.
     TodoList(TodoListItem),
+    /// Captures the terminal result of a review-mode turn.
+    Review(ReviewItem),
     /// Describes a non-fatal error surfaced as an item.
     Error(ErrorItem),
 }
@@ -140,6 +142,23 @@ pub struct AgentMessageItem {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct ReasoningItem {
     pub text: String,
+}
+
+/// The status of a review run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewStatus {
+    Completed,
+    Interrupted,
+    TimedOut,
+}
+
+/// Structured review result emitted by review mode.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct ReviewItem {
+    pub status: ReviewStatus,
+    pub text: String,
+    pub output: Option<JsonValue>,
 }
 
 /// The status of a command execution.

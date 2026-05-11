@@ -26,6 +26,12 @@ pub(crate) trait EventProcessor {
     fn process_warning(&mut self, message: String) -> CodexStatus;
 
     fn print_final_output(&mut self) {}
+
+    fn review_has_findings(&self) -> bool {
+        false
+    }
+
+    fn mark_review_timed_out(&mut self, _message: String) {}
 }
 
 pub(crate) fn handle_last_message(last_agent_message: Option<&str>, output_file: &Path) {

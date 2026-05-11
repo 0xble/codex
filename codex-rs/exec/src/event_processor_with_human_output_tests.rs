@@ -23,6 +23,7 @@ use super::EventProcessorWithHumanOutput;
 use super::config_summary_entries;
 use super::final_message_from_turn_items;
 use super::reasoning_text;
+use super::review_item_from_turn_items;
 use super::should_print_final_message_to_stdout;
 use super::should_print_final_message_to_tty;
 use crate::event_processor::EventProcessor;
@@ -60,6 +61,27 @@ fn suppresses_final_stdout_message_when_missing() {
         /*final_message*/ None, /*stdout_is_terminal*/ false,
         /*stderr_is_terminal*/ false
     ));
+}
+
+#[test]
+fn review_item_from_turn_items_recovers_structured_output() {
+    let review_output = serde_json::json!({
+        "findings": [{ "title": "bug" }],
+    });
+    let items = vec![ThreadItem::ExitedReviewMode {
+        id: "review-1".to_string(),
+        review: "review findings".to_string(),
+        review_output: Some(review_output.clone()),
+    }];
+
+    assert_eq!(
+        review_item_from_turn_items(items.as_slice()),
+        Some(serde_json::json!({
+            "status": "completed",
+            "text": "review findings",
+            "output": review_output,
+        }))
+    );
 }
 
 #[test]
@@ -298,6 +320,8 @@ fn turn_completed_recovers_final_message_from_turn_items() {
         show_agent_reasoning: true,
         show_raw_agent_reasoning: false,
         last_message_path: None,
+        review_output_path: None,
+        review_item: None,
         final_message: None,
         final_message_rendered: false,
         emit_final_message_on_shutdown: false,
@@ -346,6 +370,8 @@ fn turn_completed_overwrites_stale_final_message_from_turn_items() {
         show_agent_reasoning: true,
         show_raw_agent_reasoning: false,
         last_message_path: None,
+        review_output_path: None,
+        review_item: None,
         final_message: Some("stale answer".to_string()),
         final_message_rendered: true,
         emit_final_message_on_shutdown: false,
@@ -395,6 +421,8 @@ fn turn_completed_preserves_streamed_final_message_when_turn_items_are_empty() {
         show_agent_reasoning: true,
         show_raw_agent_reasoning: false,
         last_message_path: None,
+        review_output_path: None,
+        review_item: None,
         final_message: Some("streamed answer".to_string()),
         final_message_rendered: false,
         emit_final_message_on_shutdown: false,
@@ -439,6 +467,8 @@ fn turn_failed_clears_stale_final_message() {
         show_agent_reasoning: true,
         show_raw_agent_reasoning: false,
         last_message_path: None,
+        review_output_path: None,
+        review_item: None,
         final_message: Some("partial answer".to_string()),
         final_message_rendered: true,
         emit_final_message_on_shutdown: true,
@@ -484,6 +514,8 @@ fn turn_interrupted_clears_stale_final_message() {
         show_agent_reasoning: true,
         show_raw_agent_reasoning: false,
         last_message_path: None,
+        review_output_path: None,
+        review_item: None,
         final_message: Some("partial answer".to_string()),
         final_message_rendered: true,
         emit_final_message_on_shutdown: true,

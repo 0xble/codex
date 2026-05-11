@@ -148,6 +148,8 @@ pub(super) async fn spawn_review_thread(
     let review_request = ReviewRequest {
         target: resolved.target,
         user_facing_hint: Some(resolved.user_facing_hint),
+        supplemental_instructions: resolved.supplemental_instructions,
+        pathspecs: resolved.pathspecs,
     };
     sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
         .await;

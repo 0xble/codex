@@ -242,8 +242,45 @@ impl TurnRequestProcessor {
         collaboration_mode
     }
 
+    fn normalize_optional_review_text(
+        value: Option<String>,
+        field: &str,
+    ) -> Result<Option<String>, JSONRPCErrorError> {
+        value
+            .map(|text| {
+                let trimmed = text.trim().to_string();
+                if trimmed.is_empty() {
+                    Err(invalid_request(format!("{field} must not be empty")))
+                } else {
+                    Ok(trimmed)
+                }
+            })
+            .transpose()
+    }
+
+    fn normalize_review_pathspecs(
+        pathspecs: Option<Vec<String>>,
+    ) -> Result<Vec<String>, JSONRPCErrorError> {
+        pathspecs
+            .unwrap_or_default()
+            .into_iter()
+            .map(|pathspec| {
+                let trimmed = pathspec.trim().to_string();
+                if trimmed.is_empty() {
+                    Err(invalid_request(
+                        "pathspecs must not contain empty paths".to_string(),
+                    ))
+                } else {
+                    Ok(trimmed)
+                }
+            })
+            .collect()
+    }
+
     fn review_request_from_target(
         target: ApiReviewTarget,
+        supplemental_instructions: Option<String>,
+        pathspecs: Option<Vec<String>>,
     ) -> Result<(ReviewRequest, String), JSONRPCErrorError> {
         let cleaned_target = match target {
             ApiReviewTarget::UncommittedChanges => ApiReviewTarget::UncommittedChanges,
@@ -288,6 +325,11 @@ impl TurnRequestProcessor {
         let review_request = ReviewRequest {
             target: core_target,
             user_facing_hint: Some(hint.clone()),
+            supplemental_instructions: Self::normalize_optional_review_text(
+                supplemental_instructions,
+                "supplemental_instructions",
+            )?,
+            pathspecs: Self::normalize_review_pathspecs(pathspecs)?,
         };
 
         Ok((review_request, hint))
@@ -1137,11 +1179,14 @@ impl TurnRequestProcessor {
         let ReviewStartParams {
             thread_id,
             target,
+            supplemental_instructions,
+            pathspecs,
             delivery,
         } = params;
 
         let (parent_thread_id, parent_thread) = self.load_thread(&thread_id).await?;
-        let (review_request, display_text) = Self::review_request_from_target(target)?;
+        let (review_request, display_text) =
+            Self::review_request_from_target(target, supplemental_instructions, pathspecs)?;
         match delivery.unwrap_or(ApiReviewDelivery::Inline).to_core() {
             CoreReviewDelivery::Inline => {
                 self.start_inline_review(

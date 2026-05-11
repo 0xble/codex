@@ -2888,6 +2888,11 @@ pub struct ReviewRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub user_facing_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub supplemental_instructions: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pathspecs: Vec<String>,
 }
 
 /// Structured review result produced by a child review session.

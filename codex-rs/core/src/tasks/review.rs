@@ -30,6 +30,8 @@ use std::sync::LazyLock;
 use super::SessionTask;
 use super::SessionTaskContext;
 
+const CODEX_REVIEW_MODE_ENV_VAR: &str = "CODEX_REVIEW_MODE";
+
 static REVIEW_EXIT_SUCCESS_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     let normalized =
         normalize_review_template_line_endings(crate::client_common::REVIEW_EXIT_SUCCESS_TMPL);
@@ -116,6 +118,11 @@ async fn start_review_conversation(
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
     sub_agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
+    sub_agent_config
+        .permissions
+        .shell_environment_policy
+        .r#set
+        .insert(CODEX_REVIEW_MODE_ENV_VAR.to_string(), "1".to_string());
 
     let model = config
         .review_model

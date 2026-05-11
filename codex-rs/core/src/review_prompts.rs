@@ -10,6 +10,8 @@ pub struct ResolvedReviewRequest {
     pub target: ReviewTarget,
     pub prompt: String,
     pub user_facing_hint: String,
+    pub supplemental_instructions: Option<String>,
+    pub pathspecs: Vec<String>,
 }
 
 const UNCOMMITTED_PROMPT: &str = "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.";
@@ -40,49 +42,61 @@ pub fn resolve_review_request(
     request: ReviewRequest,
     cwd: &AbsolutePathBuf,
 ) -> anyhow::Result<ResolvedReviewRequest> {
-    let target = request.target;
-    let prompt = review_prompt(&target, cwd)?;
-    let user_facing_hint = request
-        .user_facing_hint
-        .unwrap_or_else(|| user_facing_hint(&target));
+    let ReviewRequest {
+        target,
+        user_facing_hint: requested_hint,
+        supplemental_instructions,
+        pathspecs,
+    } = request;
+    let prompt = review_prompt(
+        &target,
+        cwd,
+        supplemental_instructions.as_deref(),
+        &pathspecs,
+    )?;
+    let user_facing_hint = requested_hint.unwrap_or_else(|| user_facing_hint(&target));
 
     Ok(ResolvedReviewRequest {
         target,
         prompt,
         user_facing_hint,
+        supplemental_instructions,
+        pathspecs,
     })
 }
 
-pub fn review_prompt(target: &ReviewTarget, cwd: &AbsolutePathBuf) -> anyhow::Result<String> {
-    match target {
-        ReviewTarget::UncommittedChanges => Ok(UNCOMMITTED_PROMPT.to_string()),
+pub fn review_prompt(
+    target: &ReviewTarget,
+    cwd: &AbsolutePathBuf,
+    supplemental_instructions: Option<&str>,
+    pathspecs: &[String],
+) -> anyhow::Result<String> {
+    let mut prompt = match target {
+        ReviewTarget::UncommittedChanges => UNCOMMITTED_PROMPT.to_string(),
         ReviewTarget::BaseBranch { branch } => {
             if let Some(commit) = merge_base_with_head(cwd, branch)? {
-                Ok(render_review_prompt(
+                render_review_prompt(
                     &BASE_BRANCH_PROMPT_TEMPLATE,
                     [
                         ("base_branch", branch.as_str()),
                         ("merge_base_sha", commit.as_str()),
                     ],
-                ))
+                )
             } else {
-                Ok(render_review_prompt(
+                render_review_prompt(
                     &BASE_BRANCH_PROMPT_BACKUP_TEMPLATE,
                     [("branch", branch.as_str())],
-                ))
+                )
             }
         }
         ReviewTarget::Commit { sha, title } => {
             if let Some(title) = title {
-                Ok(render_review_prompt(
+                render_review_prompt(
                     &COMMIT_PROMPT_WITH_TITLE_TEMPLATE,
                     [("sha", sha.as_str()), ("title", title.as_str())],
-                ))
+                )
             } else {
-                Ok(render_review_prompt(
-                    &COMMIT_PROMPT_TEMPLATE,
-                    [("sha", sha.as_str())],
-                ))
+                render_review_prompt(&COMMIT_PROMPT_TEMPLATE, [("sha", sha.as_str())])
             }
         }
         ReviewTarget::Custom { instructions } => {
@@ -90,9 +104,11 @@ pub fn review_prompt(target: &ReviewTarget, cwd: &AbsolutePathBuf) -> anyhow::Re
             if prompt.is_empty() {
                 anyhow::bail!("Review prompt cannot be empty");
             }
-            Ok(prompt.to_string())
+            prompt.to_string()
         }
-    }
+    };
+    append_review_constraints(&mut prompt, supplemental_instructions, pathspecs);
+    Ok(prompt)
 }
 
 fn render_review_prompt<'a, const N: usize>(
@@ -120,11 +136,45 @@ pub fn user_facing_hint(target: &ReviewTarget) -> String {
     }
 }
 
+fn append_review_constraints(
+    prompt: &mut String,
+    supplemental_instructions: Option<&str>,
+    pathspecs: &[String],
+) {
+    let mut constraints = Vec::new();
+
+    if !pathspecs.is_empty() {
+        let paths = pathspecs
+            .iter()
+            .map(|path| format!("`{path}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        constraints.push(format!("Limit review findings to these paths: {paths}."));
+    }
+
+    if let Some(instructions) = supplemental_instructions.map(str::trim)
+        && !instructions.is_empty()
+    {
+        constraints.push(format!("Additional reviewer instructions:\n{instructions}"));
+    }
+
+    if !constraints.is_empty() {
+        prompt.push_str("\n\nAdditional review constraints:\n");
+        for constraint in constraints {
+            prompt.push_str("- ");
+            prompt.push_str(&constraint);
+            prompt.push('\n');
+        }
+    }
+}
+
 impl From<ResolvedReviewRequest> for ReviewRequest {
     fn from(resolved: ResolvedReviewRequest) -> Self {
         ReviewRequest {
             target: resolved.target,
             user_facing_hint: Some(resolved.user_facing_hint),
+            supplemental_instructions: resolved.supplemental_instructions,
+            pathspecs: resolved.pathspecs,
         }
     }
 }
@@ -162,6 +212,8 @@ mod tests {
                     title: None,
                 },
                 &AbsolutePathBuf::current_dir().expect("cwd"),
+                /*supplemental_instructions*/ None,
+                &[],
             )
             .expect("commit prompt should render"),
             "Review the code changes introduced by commit deadbeef. Provide prioritized, actionable findings."
@@ -177,6 +229,8 @@ mod tests {
                     title: Some("Fix bug".to_string()),
                 },
                 &AbsolutePathBuf::current_dir().expect("cwd"),
+                /*supplemental_instructions*/ None,
+                &[],
             )
             .expect("commit prompt should render"),
             "Review the code changes introduced by commit deadbeef (\"Fix bug\"). Provide prioritized, actionable findings."

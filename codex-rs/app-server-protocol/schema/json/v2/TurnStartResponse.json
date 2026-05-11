@@ -1266,6 +1266,7 @@
             "review": {
               "type": "string"
             },
+            "reviewOutput": true,
             "type": {
               "enum": [
                 "exitedReviewMode"

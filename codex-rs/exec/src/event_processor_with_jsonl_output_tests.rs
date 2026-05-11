@@ -111,14 +111,36 @@ fn mcp_tool_call_result_preserves_meta_in_jsonl_event() {
 }
 
 #[test]
-fn exited_review_mode_updates_final_message_without_jsonl_item() {
-    let mut processor = EventProcessorWithJsonOutput::new(None);
+fn exited_review_mode_item_started_is_ignored() {
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
+
+    let collected = processor.collect_thread_events(ServerNotification::ItemStarted(
+        codex_app_server_protocol::ItemStartedNotification {
+            item: ThreadItem::ExitedReviewMode {
+                id: "review-1".to_string(),
+                review: "review findings".to_string(),
+                review_output: None,
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            started_at_ms: 0,
+        },
+    ));
+
+    assert_eq!(collected.status, CodexStatus::Running);
+    assert!(collected.events.is_empty());
+}
+
+#[test]
+fn exited_review_mode_updates_final_message_and_review_item() {
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
         codex_app_server_protocol::ItemCompletedNotification {
             item: ThreadItem::ExitedReviewMode {
                 id: "review-1".to_string(),
                 review: "review findings".to_string(),
+                review_output: None,
             },
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
@@ -127,7 +149,19 @@ fn exited_review_mode_updates_final_message_without_jsonl_item() {
     ));
 
     assert_eq!(collected.status, CodexStatus::Running);
-    assert!(collected.events.is_empty());
+    assert_eq!(
+        collected.events,
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ExecThreadItem {
+                id: "item_0".to_string(),
+                details: ThreadItemDetails::Review(ReviewItem {
+                    status: ReviewStatus::Interrupted,
+                    text: "review findings".to_string(),
+                    output: None,
+                }),
+            },
+        })]
+    );
 
     let status = processor.process_server_notification(ServerNotification::TurnCompleted(
         codex_app_server_protocol::TurnCompletedNotification {
@@ -138,6 +172,7 @@ fn exited_review_mode_updates_final_message_without_jsonl_item() {
                 items: vec![ThreadItem::ExitedReviewMode {
                     id: "review-1".to_string(),
                     review: "review findings".to_string(),
+                    review_output: None,
                 }],
                 status: TurnStatus::Completed,
                 error: None,
@@ -150,4 +185,52 @@ fn exited_review_mode_updates_final_message_without_jsonl_item() {
 
     assert_eq!(status, CodexStatus::InitiateShutdown);
     assert_eq!(processor.final_message(), Some("review findings"));
+    assert_eq!(
+        processor.review_item(),
+        Some(&ReviewItem {
+            status: ReviewStatus::Interrupted,
+            text: "review findings".to_string(),
+            output: None,
+        })
+    );
+}
+
+#[test]
+fn turn_completed_recovered_review_item_updates_review_output_state() {
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
+    let review_output = serde_json::json!({
+        "findings": [{ "title": "bug" }],
+    });
+
+    let status = processor.process_server_notification(ServerNotification::TurnCompleted(
+        codex_app_server_protocol::TurnCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: codex_app_server_protocol::Turn {
+                id: "turn-1".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
+                items: vec![ThreadItem::ExitedReviewMode {
+                    id: "review-1".to_string(),
+                    review: "review findings".to_string(),
+                    review_output: Some(review_output.clone()),
+                }],
+                status: TurnStatus::Completed,
+                error: None,
+                started_at: None,
+                completed_at: Some(0),
+                duration_ms: None,
+            },
+        },
+    ));
+
+    assert_eq!(status, CodexStatus::InitiateShutdown);
+    assert_eq!(processor.final_message(), Some("review findings"));
+    assert_eq!(
+        processor.review_item(),
+        Some(&ReviewItem {
+            status: ReviewStatus::Completed,
+            text: "review findings".to_string(),
+            output: Some(review_output),
+        })
+    );
+    assert!(EventProcessor::review_has_findings(&processor));
 }

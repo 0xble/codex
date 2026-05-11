@@ -356,7 +356,13 @@ pub enum ThreadItem {
     EnteredReviewMode { id: String, review: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    ExitedReviewMode { id: String, review: String },
+    ExitedReviewMode {
+        id: String,
+        review: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        review_output: Option<JsonValue>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     ContextCompaction { id: String },
