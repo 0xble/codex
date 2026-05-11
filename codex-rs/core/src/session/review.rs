@@ -173,6 +173,8 @@ pub(super) async fn spawn_review_thread(
         id: uuid::Uuid::now_v7().to_string(),
         target: resolved.target,
         user_facing_hint: resolved.user_facing_hint,
+        supplemental_instructions: resolved.supplemental_instructions,
+        pathspecs: resolved.pathspecs,
     });
     sess.emit_turn_item_started(&tc, &item).await;
     sess.emit_turn_item_completed(&tc, item).await;

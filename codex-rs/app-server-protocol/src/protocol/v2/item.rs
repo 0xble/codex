@@ -387,6 +387,9 @@ pub enum ThreadItem {
     ExitedReviewMode {
         id: String,
         review: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        review_output: Option<JsonValue>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -931,6 +934,10 @@ impl From<CoreTurnItem> for ThreadItem {
             CoreTurnItem::ExitedReviewMode(review) => ThreadItem::ExitedReviewMode {
                 id: review.id,
                 review: review_output_text(review.review_output.as_ref()),
+                review_output: review
+                    .review_output
+                    .as_ref()
+                    .and_then(|output| serde_json::to_value(output).ok()),
             },
             CoreTurnItem::FileChange(file_change) => ThreadItem::FileChange {
                 id: file_change.id,

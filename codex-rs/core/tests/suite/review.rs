@@ -79,6 +79,8 @@ async fn review_op_emits_lifecycle_and_review_output() {
                     instructions: "Please review my changes".to_string(),
                 },
                 user_facing_hint: None,
+                supplemental_instructions: None,
+                pathspecs: Vec::new(),
             },
         })
         .await
@@ -383,6 +385,8 @@ async fn review_op_with_plain_text_emits_review_fallback() {
                     instructions: "Plain text review".to_string(),
                 },
                 user_facing_hint: None,
+                supplemental_instructions: None,
+                pathspecs: Vec::new(),
             },
         })
         .await
@@ -439,6 +443,8 @@ async fn review_filters_agent_message_related_events() {
                     instructions: "Filter streaming events".to_string(),
                 },
                 user_facing_hint: None,
+                supplemental_instructions: None,
+                pathspecs: Vec::new(),
             },
         })
         .await
@@ -513,6 +519,8 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
                     instructions: "check structured".to_string(),
                 },
                 user_facing_hint: None,
+                supplemental_instructions: None,
+                pathspecs: Vec::new(),
             },
         })
         .await
@@ -570,6 +578,8 @@ async fn review_uses_custom_review_model_from_config() {
                     instructions: "use custom model".to_string(),
                 },
                 user_facing_hint: None,
+                supplemental_instructions: None,
+                pathspecs: Vec::new(),
             },
         })
         .await
@@ -621,6 +631,8 @@ async fn review_uses_session_model_when_review_model_unset() {
                     instructions: "use session model".to_string(),
                 },
                 user_facing_hint: None,
+                supplemental_instructions: None,
+                pathspecs: Vec::new(),
             },
         })
         .await
@@ -738,6 +750,8 @@ async fn review_input_isolated_from_parent_history() {
                     instructions: review_prompt.clone(),
                 },
                 user_facing_hint: None,
+                supplemental_instructions: None,
+                pathspecs: Vec::new(),
             },
         })
         .await
@@ -851,6 +865,8 @@ async fn review_history_surfaces_in_parent_session() {
                     instructions: "Start a review".to_string(),
                 },
                 user_facing_hint: None,
+                supplemental_instructions: None,
+                pathspecs: Vec::new(),
             },
         })
         .await
@@ -1001,6 +1017,8 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
                     branch: "main".to_string(),
                 },
                 user_facing_hint: None,
+                supplemental_instructions: None,
+                pathspecs: Vec::new(),
             },
         })
         .await

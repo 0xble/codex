@@ -32,6 +32,8 @@ use super::SessionTask;
 use super::SessionTaskContext;
 use super::SessionTaskResult;
 
+const CODEX_REVIEW_MODE_ENV_VAR: &str = "CODEX_REVIEW_MODE";
+
 #[derive(Clone, Copy)]
 pub(crate) struct ReviewTask;
 
@@ -119,6 +121,11 @@ async fn start_review_conversation(
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
     sub_agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
+    sub_agent_config
+        .permissions
+        .shell_environment_policy
+        .r#set
+        .insert(CODEX_REVIEW_MODE_ENV_VAR.to_string(), "1".to_string());
 
     let model = config
         .review_model
