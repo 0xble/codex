@@ -4,6 +4,8 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 codex_rs_dir="$repo_root/codex-rs"
 install_dir="$HOME/.local/opt/codex/local/libexec"
+bin_dir="$HOME/.local/bin"
+bin_path="$bin_dir/codex"
 src="$codex_rs_dir/target/release/codex"
 
 cd "$codex_rs_dir"
@@ -14,6 +16,18 @@ tmp="$(mktemp "$install_dir/codex.XXXXXX")"
 cp "$src" "$tmp"
 chmod 0755 "$tmp"
 mv -f "$tmp" "$install_dir/codex"
+
+mkdir -p "$bin_dir"
+if [[ ! -e "$bin_path" ]]; then
+  umask 022
+  cat >| "$bin_path" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+exec "$HOME/.local/opt/codex/local/libexec/codex" "$@"
+SH
+  chmod 0755 "$bin_path"
+fi
 
 echo "installed: $install_dir/codex"
 "$install_dir/codex" --version

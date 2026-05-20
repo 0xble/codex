@@ -2,8 +2,15 @@
 set -euo pipefail
 
 bin_path="$HOME/.local/bin/codex"
+libexec_path="$HOME/.local/opt/codex/local/libexec/codex"
 
 test -x "$bin_path"
-"$bin_path" --version | /usr/bin/grep -Fq '0xble'
+test -x "$libexec_path"
+
+bin_version="$("$bin_path" --version)"
+libexec_version="$("$libexec_path" --version)"
+
+printf '%s\n' "$bin_version" | /usr/bin/grep -Fq '0xble'
+test "$bin_version" = "$libexec_version"
 
 echo "smoke ok: codex"
