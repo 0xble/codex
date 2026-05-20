@@ -258,6 +258,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)]
     fn account_status_line_accent_uses_blue_fallback_over_theme_scope() {
         let line = status_line_from_segments_with_resolver(
             [(StatusLineItem::Account, "brian@brianle.xyz".to_string())],
