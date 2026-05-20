@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+bin_path="$HOME/.local/bin/codex"
+
+test -x "$bin_path"
+"$bin_path" --version | /usr/bin/grep -Fq '0xble'
+
+echo "smoke ok: codex"
