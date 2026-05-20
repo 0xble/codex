@@ -19,13 +19,19 @@ pub(super) fn keyboard_enhancement_disabled() -> bool {
     let disable_env = std::env::var(DISABLE_KEYBOARD_ENHANCEMENT_ENV_VAR).ok();
     let is_wsl = running_in_wsl();
     let is_vscode_terminal = is_wsl && running_in_vscode_terminal();
-    keyboard_enhancement_disabled_for(disable_env.as_deref(), is_wsl, is_vscode_terminal)
+    keyboard_enhancement_disabled_for(
+        disable_env.as_deref(),
+        is_wsl,
+        is_vscode_terminal,
+        running_over_mosh_transport(),
+    )
 }
 
 fn keyboard_enhancement_disabled_for(
     disable_env: Option<&str>,
     is_wsl: bool,
     is_vscode_terminal: bool,
+    is_mosh_transport: bool,
 ) -> bool {
     if let Some(disabled) = parse_bool_env(disable_env) {
         return disabled;
@@ -34,7 +40,16 @@ fn keyboard_enhancement_disabled_for(
     // VS Code running a WSL shell can hide TERM_PROGRAM from the Linux process
     // environment, so `running_in_vscode_terminal` also probes the Windows-side
     // environment through WSL interop.
-    is_wsl && is_vscode_terminal
+    (is_wsl && is_vscode_terminal) || is_mosh_transport
+}
+
+fn running_over_mosh_transport() -> bool {
+    transport_env_is_mosh(std::env::var("AI_TUI_TRANSPORT").ok().as_deref())
+        || transport_env_is_mosh(std::env::var("CODEX_TUI_TRANSPORT").ok().as_deref())
+}
+
+fn transport_env_is_mosh(value: Option<&str>) -> bool {
+    value.is_some_and(|value| value.eq_ignore_ascii_case("mosh"))
 }
 
 fn parse_bool_env(value: Option<&str>) -> Option<bool> {
@@ -286,6 +301,7 @@ mod tests {
     use super::parse_bool_env;
     use super::tmux_session_detected;
     use super::tmux_should_enable_modify_other_keys_for;
+    use super::transport_env_is_mosh;
     use super::vscode_terminal_detected;
     use crossterm::Command;
     use pretty_assertions::assert_eq;
@@ -311,17 +327,28 @@ mod tests {
     #[test]
     fn keyboard_enhancement_auto_disables_for_vscode_in_wsl() {
         assert!(keyboard_enhancement_disabled_for(
-            /*disable_env*/ None, /*is_wsl*/ true, /*is_vscode_terminal*/ true
+            /*disable_env*/ None, /*is_wsl*/ true, /*is_vscode_terminal*/ true,
+            /*is_mosh_transport*/ false
         ));
     }
 
     #[test]
     fn keyboard_enhancement_auto_disable_requires_wsl_and_vscode() {
         assert!(!keyboard_enhancement_disabled_for(
-            /*disable_env*/ None, /*is_wsl*/ true, /*is_vscode_terminal*/ false
+            /*disable_env*/ None, /*is_wsl*/ true, /*is_vscode_terminal*/ false,
+            /*is_mosh_transport*/ false
         ));
         assert!(!keyboard_enhancement_disabled_for(
-            /*disable_env*/ None, /*is_wsl*/ false, /*is_vscode_terminal*/ true
+            /*disable_env*/ None, /*is_wsl*/ false, /*is_vscode_terminal*/ true,
+            /*is_mosh_transport*/ false
+        ));
+    }
+
+    #[test]
+    fn keyboard_enhancement_auto_disables_for_mosh_transport() {
+        assert!(keyboard_enhancement_disabled_for(
+            /*disable_env*/ None, /*is_wsl*/ false, /*is_vscode_terminal*/ false,
+            /*is_mosh_transport*/ true
         ));
     }
 
@@ -330,13 +357,23 @@ mod tests {
         assert!(!keyboard_enhancement_disabled_for(
             Some("0"),
             /*is_wsl*/ true,
-            /*is_vscode_terminal*/ true
+            /*is_vscode_terminal*/ true,
+            /*is_mosh_transport*/ true
         ));
         assert!(keyboard_enhancement_disabled_for(
             Some("1"),
             /*is_wsl*/ false,
-            /*is_vscode_terminal*/ false
+            /*is_vscode_terminal*/ false,
+            /*is_mosh_transport*/ false
         ));
+    }
+
+    #[test]
+    fn mosh_transport_detection_accepts_agent_transport_markers() {
+        assert!(transport_env_is_mosh(Some("mosh")));
+        assert!(transport_env_is_mosh(Some("MOSH")));
+        assert!(!transport_env_is_mosh(Some("ssh")));
+        assert!(!transport_env_is_mosh(None));
     }
 
     #[test]
