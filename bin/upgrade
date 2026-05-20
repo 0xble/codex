@@ -18,16 +18,59 @@ chmod 0755 "$tmp"
 mv -f "$tmp" "$install_dir/codex"
 
 mkdir -p "$bin_dir"
-if [[ ! -e "$bin_path" ]]; then
-  umask 022
-  cat >| "$bin_path" <<'SH'
+tmp_bin="$(mktemp "$bin_dir/codex.XXXXXX")"
+umask 022
+cat >| "$tmp_bin" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 
-exec "$HOME/.local/opt/codex/local/libexec/codex" "$@"
+resolve_real_codex() {
+  if [[ -n "${CODEX_REAL_BIN:-}" && -x "${CODEX_REAL_BIN}" ]]; then
+    printf '%s\n' "${CODEX_REAL_BIN}"
+    return 0
+  fi
+
+  local candidates=(
+    "$HOME/.local/opt/codex/local/libexec/codex"
+    "$HOME/.local/opt/codex/local/bin/codex"
+  )
+  local candidate=""
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  echo "error: unable to locate Codex binary under ~/.local/opt/codex/local/{libexec/codex,bin/codex}" >&2
+  return 1
+}
+
+main() {
+  local real_codex=""
+  real_codex="$(resolve_real_codex)"
+  local editor="${CODEX_EDITOR:-dotagent-editor}"
+  export EDITOR="$editor"
+  export VISUAL="$editor"
+  export AGENT_SHELL=1
+
+  # Codex's Rust TLS stack can fail if macOS native trust settings are
+  # unreadable. Only fall back to the system PEM bundle when the native system
+  # trust store preflight fails, preserving Keychain roots in the normal case.
+  if [[ -z "${CODEX_CA_CERTIFICATE:-}" && -z "${SSL_CERT_FILE:-}" && -r /etc/ssl/cert.pem ]]; then
+    if ! security dump-trust-settings -s >/dev/null 2>&1; then
+      export CODEX_CA_CERTIFICATE=/etc/ssl/cert.pem
+    fi
+  fi
+
+  exec "$real_codex" "$@"
+}
+
+main "$@"
 SH
-  chmod 0755 "$bin_path"
-fi
+chmod 0755 "$tmp_bin"
+mv -f "$tmp_bin" "$bin_path"
 
 echo "installed: $install_dir/codex"
 "$install_dir/codex" --version
