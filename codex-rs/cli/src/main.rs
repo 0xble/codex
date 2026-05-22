@@ -275,7 +275,7 @@ struct ReviewSharedCliOptions {
 
     /// Configuration profile from config.toml to specify default options.
     #[arg(long = "profile", short = 'p')]
-    pub config_profile: Option<String>,
+    pub config_profile: Option<ProfileV2Name>,
 
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
@@ -313,7 +313,7 @@ impl ReviewSharedCliOptions {
         shared.model = self.model;
         shared.oss = self.oss;
         shared.oss_provider = self.oss_provider;
-        shared.config_profile = self.config_profile;
+        shared.config_profile_v2 = self.config_profile;
         shared.sandbox_mode = self.sandbox_mode;
         shared.dangerously_bypass_approvals_and_sandbox =
             self.dangerously_bypass_approvals_and_sandbox;
