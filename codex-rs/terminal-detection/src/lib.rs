@@ -70,6 +70,26 @@ pub enum Multiplexer {
     },
 }
 
+/// Explicit transport compatibility mode selected by the caller.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalTransport {
+    /// The terminal UI is attached through mosh and should avoid fragile query/negotiation paths.
+    Mosh,
+}
+
+/// Shared terminal feature gates derived from transport and terminal metadata.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TerminalCapabilities {
+    pub supports_bracketed_paste: bool,
+    pub supports_focus_change: bool,
+    pub supports_keyboard_enhancement: bool,
+    pub supports_cursor_position_query: bool,
+    pub supports_default_color_query: bool,
+    pub supports_synchronized_updates: bool,
+    pub supports_terminal_title: bool,
+    pub uses_mosh_visual_fallbacks: bool,
+}
+
 /// tmux client terminal identification captured via `tmux display-message`.
 ///
 /// `termtype` corresponds to `#{client_termtype}` and typically reflects the
@@ -215,6 +235,8 @@ impl TerminalInfo {
 }
 
 static TERMINAL_INFO: OnceLock<TerminalInfo> = OnceLock::new();
+static TERMINAL_TRANSPORT: OnceLock<Option<TerminalTransport>> = OnceLock::new();
+static TERMINAL_CAPABILITIES: OnceLock<TerminalCapabilities> = OnceLock::new();
 
 /// Environment variable access used by terminal detection.
 ///
@@ -282,6 +304,58 @@ pub fn terminal_info() -> TerminalInfo {
     TERMINAL_INFO
         .get_or_init(|| detect_terminal_info_from_env(&ProcessEnvironment))
         .clone()
+}
+
+/// Returns the explicitly selected terminal transport for the current process.
+pub fn terminal_transport() -> Option<TerminalTransport> {
+    *TERMINAL_TRANSPORT.get_or_init(|| detect_terminal_transport_from_env(&ProcessEnvironment))
+}
+
+/// Returns the terminal feature gates for the current process.
+pub fn terminal_capabilities() -> TerminalCapabilities {
+    *TERMINAL_CAPABILITIES
+        .get_or_init(|| detect_terminal_capabilities(terminal_transport(), &terminal_info()))
+}
+
+fn detect_terminal_transport_from_env(env: &dyn Environment) -> Option<TerminalTransport> {
+    for name in ["CODEX_TUI_TRANSPORT", "AI_TUI_TRANSPORT"] {
+        if env
+            .var_non_empty(name)
+            .as_deref()
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("mosh"))
+        {
+            return Some(TerminalTransport::Mosh);
+        }
+    }
+
+    if env.var_non_empty("MOSH_IP").is_some() || env.var_non_empty("MOSH_PORT").is_some() {
+        return Some(TerminalTransport::Mosh);
+    }
+
+    None
+}
+
+fn detect_terminal_capabilities(
+    transport: Option<TerminalTransport>,
+    info: &TerminalInfo,
+) -> TerminalCapabilities {
+    let is_mosh = matches!(transport, Some(TerminalTransport::Mosh));
+
+    TerminalCapabilities {
+        supports_bracketed_paste: true,
+        supports_focus_change: true,
+        supports_keyboard_enhancement: !is_mosh,
+        supports_cursor_position_query: !is_mosh,
+        supports_default_color_query: !is_mosh,
+        supports_synchronized_updates: !is_mosh
+            && synchronized_updates_supported_for_multiplexer(info.multiplexer.as_ref()),
+        supports_terminal_title: !is_mosh,
+        uses_mosh_visual_fallbacks: is_mosh,
+    }
+}
+
+fn synchronized_updates_supported_for_multiplexer(multiplexer: Option<&Multiplexer>) -> bool {
+    !matches!(multiplexer, Some(Multiplexer::Tmux { .. }))
 }
 
 /// Detects structured terminal metadata from an injectable environment.

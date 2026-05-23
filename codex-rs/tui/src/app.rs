@@ -160,11 +160,13 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 #[cfg(target_os = "windows")]
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_rollout::StateDbHandle;
+use codex_terminal_detection::terminal_capabilities;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::builtin_permission_profile_for_active_permission_profile;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
+use crossterm::cursor::SetCursorStyle;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -1361,12 +1363,23 @@ See the Codex keymap documentation for supported actions and examples."
             let area = frame.area();
             rendered_area = area;
             self.chat_widget.render(area, frame.buffer);
-            if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
-                frame.set_cursor_style(self.chat_widget.cursor_style(area));
-                frame.set_cursor_position((x, y));
-            }
+            self.apply_chat_widget_cursor(frame, area);
         })?;
         Ok(rendered_area)
+    }
+
+    fn apply_chat_widget_cursor(&self, frame: &mut crate::custom_terminal::Frame<'_>, area: Rect) {
+        let Some((x, y)) = self.chat_widget.cursor_pos(area) else {
+            return;
+        };
+
+        let cursor_style = self.chat_widget.cursor_style(area);
+        if should_emulate_block_cursor(cursor_style) {
+            frame.emulate_block_cursor((x, y));
+        } else {
+            frame.set_cursor_style(cursor_style);
+            frame.set_cursor_position((x, y));
+        }
     }
 }
 
@@ -1376,6 +1389,14 @@ impl Drop for App {
             tracing::debug!(error = %err, "failed to clear terminal title on app drop");
         }
     }
+}
+
+fn should_emulate_block_cursor(cursor_style: SetCursorStyle) -> bool {
+    terminal_capabilities().uses_mosh_visual_fallbacks
+        && matches!(
+            cursor_style,
+            SetCursorStyle::SteadyBlock | SetCursorStyle::BlinkingBlock
+        )
 }
 
 #[cfg(test)]

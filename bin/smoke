@@ -3,14 +3,25 @@ set -euo pipefail
 
 bin_path="$HOME/.local/bin/codex"
 libexec_path="$HOME/.local/opt/codex/local/libexec/codex"
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+source_version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo_root/codex-rs/Cargo.toml" | head -n 1)"
+if [[ -z "$source_version" ]]; then
+  echo "error: unable to read Codex source version from $repo_root/codex-rs/Cargo.toml" >&2
+  exit 1
+fi
 
 test -x "$bin_path"
 test -x "$libexec_path"
 
 bin_version="$("$bin_path" --version)"
 libexec_version="$("$libexec_path" --version)"
+expected_version="codex-cli $source_version"
 
 printf '%s\n' "$bin_version" | /usr/bin/grep -Fq '0xble'
 test "$bin_version" = "$libexec_version"
+if [[ "$bin_version" != "$expected_version" ]]; then
+  echo "error: installed Codex version $bin_version does not match source version $expected_version" >&2
+  exit 1
+fi
 
 echo "smoke ok: codex"

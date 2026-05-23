@@ -90,6 +90,7 @@ pub fn proposed_plan_bg(terminal_bg: (u8, u8, u8)) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal_palette::MOSH_VISUAL_FALLBACK_BG;
     use pretty_assertions::assert_eq;
     use ratatui::style::Modifier;
 
@@ -150,6 +151,16 @@ mod tests {
                 StdoutColorLevel::TrueColor,
             ),
             expected
+        );
+    }
+
+    #[test]
+    fn mosh_visual_fallback_keeps_user_message_background() {
+        let style = user_message_style_for(Some(MOSH_VISUAL_FALLBACK_BG));
+
+        assert!(
+            style.bg.is_some(),
+            "mosh fallback must preserve the prompt bar background"
         );
     }
 }

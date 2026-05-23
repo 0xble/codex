@@ -69,6 +69,95 @@ fn terminal_info(
 }
 
 #[test]
+fn detects_mosh_transport_capabilities() {
+    let env = FakeEnvironment::new()
+        .with_var("CODEX_TUI_TRANSPORT", "mosh")
+        .with_var("TERM_PROGRAM", "iTerm.app");
+    let transport = detect_terminal_transport_from_env(&env);
+    let terminal = detect_terminal_info_from_env(&env);
+    let capabilities = detect_terminal_capabilities(transport, &terminal);
+
+    assert_eq!(transport, Some(TerminalTransport::Mosh));
+    assert_eq!(
+        capabilities,
+        TerminalCapabilities {
+            supports_bracketed_paste: true,
+            supports_focus_change: true,
+            supports_keyboard_enhancement: false,
+            supports_cursor_position_query: false,
+            supports_default_color_query: false,
+            supports_synchronized_updates: false,
+            supports_terminal_title: false,
+            uses_mosh_visual_fallbacks: true,
+        }
+    );
+}
+
+#[test]
+fn detects_native_mosh_transport_markers() {
+    let env = FakeEnvironment::new()
+        .with_var("MOSH_IP", "192.0.2.1")
+        .with_var("MOSH_PORT", "60001");
+
+    assert_eq!(
+        detect_terminal_transport_from_env(&env),
+        Some(TerminalTransport::Mosh)
+    );
+}
+
+#[test]
+fn non_mosh_capabilities_keep_supported_terminal_features() {
+    let terminal = terminal_info(
+        TerminalName::Iterm2,
+        Some("iTerm.app"),
+        Some("3.5.0"),
+        /*term*/ None,
+        /*multiplexer*/ None,
+    );
+    let capabilities = detect_terminal_capabilities(/*transport*/ None, &terminal);
+
+    assert!(capabilities.supports_bracketed_paste);
+    assert!(capabilities.supports_focus_change);
+    assert!(capabilities.supports_keyboard_enhancement);
+    assert!(capabilities.supports_cursor_position_query);
+    assert!(capabilities.supports_default_color_query);
+    assert!(capabilities.supports_synchronized_updates);
+    assert!(capabilities.supports_terminal_title);
+    assert!(!capabilities.uses_mosh_visual_fallbacks);
+}
+
+#[test]
+fn unknown_terminal_still_attempts_keyboard_enhancement() {
+    let terminal = terminal_info(
+        TerminalName::Unknown,
+        /*term_program*/ None,
+        /*version*/ None,
+        Some("xterm-256color"),
+        /*multiplexer*/ None,
+    );
+    let capabilities = detect_terminal_capabilities(/*transport*/ None, &terminal);
+
+    assert!(capabilities.supports_keyboard_enhancement);
+}
+
+#[test]
+fn tmux_disables_synchronized_updates_without_disabling_other_features() {
+    let terminal = terminal_info(
+        TerminalName::Ghostty,
+        Some("ghostty"),
+        Some("1.2.3"),
+        Some("xterm-256color"),
+        Some(Multiplexer::Tmux { version: None }),
+    );
+    let capabilities = detect_terminal_capabilities(/*transport*/ None, &terminal);
+
+    assert!(!capabilities.supports_synchronized_updates);
+    assert!(capabilities.supports_cursor_position_query);
+    assert!(capabilities.supports_default_color_query);
+    assert!(capabilities.supports_terminal_title);
+}
+
+#[test]
 fn detects_term_program() {
     let env = FakeEnvironment::new()
         .with_var("TERM_PROGRAM", "iTerm.app")

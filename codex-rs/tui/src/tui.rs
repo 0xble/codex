@@ -13,6 +13,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use codex_terminal_detection::terminal_capabilities;
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
 use crossterm::cursor::SetCursorStyle;
@@ -175,8 +176,10 @@ mod tests {
 pub fn set_modes() -> Result<()> {
     ensure_virtual_terminal_processing()?;
 
-    execute!(stdout(), EnableBracketedPaste)?;
-
+    let capabilities = terminal_capabilities();
+    if capabilities.supports_bracketed_paste {
+        execute!(stdout(), EnableBracketedPaste)?;
+    }
     enable_raw_mode()?;
     // Enable keyboard enhancement flags so modifiers for keys like Enter are disambiguated.
     // chat_composer.rs is using a keyboard event listener to enter for any modified keys
@@ -184,9 +187,13 @@ pub fn set_modes() -> Result<()> {
     // Some terminals (notably legacy Windows consoles) do not support
     // keyboard enhancement flags. Attempt to enable them, but continue
     // gracefully if unsupported.
-    keyboard_modes::enable_keyboard_enhancement();
+    if capabilities.supports_keyboard_enhancement {
+        keyboard_modes::enable_keyboard_enhancement();
+    }
 
-    let _ = execute!(stdout(), EnableFocusChange);
+    if capabilities.supports_focus_change {
+        let _ = execute!(stdout(), EnableFocusChange);
+    }
     Ok(())
 }
 
@@ -250,15 +257,24 @@ fn restore_common(
 ) -> Result<()> {
     let mut first_error = ensure_virtual_terminal_processing().err();
 
-    match keyboard_restore {
-        KeyboardRestore::PopStack => keyboard_modes::restore_keyboard_enhancement_stack(),
-        KeyboardRestore::ResetAfterExit => keyboard_modes::reset_keyboard_reporting_after_exit(),
+    let capabilities = terminal_capabilities();
+    if capabilities.supports_keyboard_enhancement {
+        match keyboard_restore {
+            KeyboardRestore::PopStack => keyboard_modes::restore_keyboard_enhancement_stack(),
+            KeyboardRestore::ResetAfterExit => {
+                keyboard_modes::reset_keyboard_reporting_after_exit()
+            }
+        }
     }
 
-    if let Err(err) = execute!(stdout(), DisableBracketedPaste) {
+    if capabilities.supports_bracketed_paste
+        && let Err(err) = execute!(stdout(), DisableBracketedPaste)
+    {
         first_error.get_or_insert(err);
     }
-    let _ = execute!(stdout(), DisableFocusChange);
+    if capabilities.supports_focus_change {
+        let _ = execute!(stdout(), DisableFocusChange);
+    }
     if matches!(raw_mode_restore, RawModeRestore::Disable)
         && let Err(err) = disable_raw_mode()
     {
@@ -315,6 +331,14 @@ pub fn restore_after_exit() -> Result<()> {
 /// Restore the terminal to its original state, but keep raw mode enabled.
 pub fn restore_keep_raw() -> Result<()> {
     restore_common(RawModeRestore::Keep, KeyboardRestore::PopStack)
+}
+
+fn terminal_update<T>(op: impl FnOnce() -> Result<T>) -> Result<T> {
+    if terminal_capabilities().supports_synchronized_updates {
+        stdout().sync_update(|_| op())?
+    } else {
+        op()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -393,33 +417,76 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
     let startup_probe = {
         use crate::terminal_probe::StartupKeyboardEnhancementProbe;
 
-        let started_at = std::time::Instant::now();
-        let keyboard_probe = if keyboard_modes::keyboard_enhancement_disabled() {
+        let capabilities = terminal_capabilities();
+        let keyboard_probe = if !capabilities.supports_keyboard_enhancement
+            || keyboard_modes::keyboard_enhancement_disabled()
+        {
             StartupKeyboardEnhancementProbe::Skip
         } else {
             StartupKeyboardEnhancementProbe::Query
         };
-        match crate::terminal_probe::startup(crate::terminal_probe::DEFAULT_TIMEOUT, keyboard_probe)
+
+        if !capabilities.supports_cursor_position_query
+            && !capabilities.supports_default_color_query
+            && keyboard_probe == StartupKeyboardEnhancementProbe::Skip
         {
-            Ok(probe) => {
-                tracing::info!(
-                    duration_ms = %started_at.elapsed().as_millis(),
-                    cursor_position = probe.cursor_position.is_some(),
-                    default_colors = probe.default_colors.is_some(),
-                    keyboard_enhancement_supported = ?probe.keyboard_enhancement_supported,
-                    "terminal startup probes completed"
-                );
-                probe
+            crate::terminal_probe::StartupProbe {
+                cursor_position: None,
+                default_colors: None,
+                keyboard_enhancement_supported: None,
             }
-            Err(err) => {
-                tracing::warn!(
-                    duration_ms = %started_at.elapsed().as_millis(),
-                    "terminal startup probes failed: {err}"
-                );
-                crate::terminal_probe::StartupProbe {
-                    cursor_position: None,
-                    default_colors: None,
-                    keyboard_enhancement_supported: None,
+        } else {
+            let started_at = std::time::Instant::now();
+            match crate::terminal_probe::startup(
+                crate::terminal_probe::DEFAULT_TIMEOUT,
+                keyboard_probe,
+            ) {
+                Ok(probe) => {
+                    tracing::info!(
+                        duration_ms = %started_at.elapsed().as_millis(),
+                        cursor_position = probe.cursor_position.is_some(),
+                        default_colors = probe.default_colors.is_some(),
+                        keyboard_enhancement_supported = ?probe.keyboard_enhancement_supported,
+                        "terminal startup probes completed"
+                    );
+                    probe
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        duration_ms = %started_at.elapsed().as_millis(),
+                        "terminal startup probes failed: {err}"
+                    );
+                    crate::terminal_probe::StartupProbe {
+                        cursor_position: None,
+                        default_colors: None,
+                        keyboard_enhancement_supported: None,
+                    }
+                }
+            }
+        }
+    };
+
+    #[cfg(unix)]
+    let cursor_pos = {
+        let capabilities = terminal_capabilities();
+        if !capabilities.supports_cursor_position_query {
+            let screen_size = backend.size()?;
+            Position {
+                x: 0,
+                y: screen_size.height.saturating_sub(1),
+            }
+        } else {
+            match startup_probe.cursor_position {
+                Some(pos) => pos,
+                None => {
+                    let screen_size = backend.size()?;
+                    tracing::warn!(
+                        "initial cursor position probe timed out; defaulting to bottom row"
+                    );
+                    Position {
+                        x: 0,
+                        y: screen_size.height.saturating_sub(1),
+                    }
                 }
             }
         }
@@ -427,15 +494,6 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
 
     #[cfg(unix)]
     crate::terminal_palette::set_default_colors_from_startup_probe(startup_probe.default_colors);
-
-    #[cfg(unix)]
-    let cursor_pos = match startup_probe.cursor_position {
-        Some(pos) => pos,
-        None => {
-            tracing::warn!("initial cursor position probe timed out; defaulting to origin");
-            Position { x: 0, y: 0 }
-        }
-    };
 
     #[cfg(unix)]
     let enhanced_keys_supported = startup_probe
@@ -895,7 +953,7 @@ impl Tui {
 
         ensure_virtual_terminal_processing()?;
 
-        stdout().sync_update(|_| {
+        terminal_update(|| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;
@@ -949,7 +1007,7 @@ impl Tui {
             terminal.draw(|frame| {
                 draw_fn(frame);
             })
-        })?
+        })
     }
 
     pub fn draw_ambient_pet_image(
@@ -962,13 +1020,13 @@ impl Tui {
 
         let terminal = &mut self.terminal;
         let state = &mut self.ambient_pet_image_state;
-        stdout().sync_update(|_| {
+        terminal_update(|| {
             match crate::pets::render_ambient_pet_image(terminal.backend_mut(), state, request) {
                 Ok(()) => Ok(Ok(())),
                 Err(crate::pets::PetImageRenderError::Terminal(err)) => Err(err),
                 Err(err @ crate::pets::PetImageRenderError::Asset(_)) => Ok(Err(err)),
             }
-        })??
+        })?
     }
 
     pub fn draw_pet_picker_preview_image(
@@ -981,7 +1039,7 @@ impl Tui {
 
         let terminal = &mut self.terminal;
         let state = &mut self.pet_picker_preview_image_state;
-        stdout().sync_update(|_| {
+        terminal_update(|| {
             match crate::pets::render_pet_picker_preview_image(
                 terminal.backend_mut(),
                 state,
@@ -991,7 +1049,7 @@ impl Tui {
                 Err(crate::pets::PetImageRenderError::Terminal(err)) => Err(err),
                 Err(err @ crate::pets::PetImageRenderError::Asset(_)) => Ok(Err(err)),
             }
-        })??
+        })?
     }
 
     pub fn clear_ambient_pet_image(
@@ -1027,7 +1085,7 @@ impl Tui {
 
         ensure_virtual_terminal_processing()?;
 
-        stdout().sync_update(|_| {
+        terminal_update(|| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;
@@ -1063,10 +1121,14 @@ impl Tui {
             terminal.draw(|frame| {
                 draw_fn(frame);
             })
-        })?
+        })
     }
 
     fn pending_viewport_area(&mut self) -> Result<Option<Rect>> {
+        if !terminal_capabilities().supports_cursor_position_query {
+            return Ok(None);
+        }
+
         let terminal = &mut self.terminal;
         let screen_size = terminal.size()?;
         let last_known_screen_size = terminal.last_known_screen_size;
