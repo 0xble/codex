@@ -1,7 +1,11 @@
 use crate::color::perceptual_distance;
 use codex_terminal_detection::TerminalName;
+use codex_terminal_detection::terminal_capabilities;
 use codex_terminal_detection::terminal_info;
 use ratatui::style::Color;
+
+pub(crate) const MOSH_VISUAL_FALLBACK_BG: (u8, u8, u8) = (30, 30, 46);
+const MOSH_VISUAL_FALLBACK_FG: (u8, u8, u8) = (205, 214, 244);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StdoutColorLevel {
@@ -84,6 +88,10 @@ fn best_color_for_color_level(target: (u8, u8, u8), color_level: StdoutColorLeve
 }
 
 pub fn requery_default_colors() {
+    if !terminal_capabilities().supports_default_color_query {
+        return;
+    }
+
     imp::requery_default_colors();
 }
 
@@ -93,7 +101,24 @@ pub struct DefaultColors {
     bg: (u8, u8, u8),
 }
 
+impl DefaultColors {
+    fn mosh_visual_fallback() -> Self {
+        Self {
+            fg: MOSH_VISUAL_FALLBACK_FG,
+            bg: MOSH_VISUAL_FALLBACK_BG,
+        }
+    }
+}
+
 pub fn default_colors() -> Option<DefaultColors> {
+    let capabilities = terminal_capabilities();
+    if capabilities.uses_mosh_visual_fallbacks {
+        return Some(DefaultColors::mosh_visual_fallback());
+    }
+    if !capabilities.supports_default_color_query {
+        return None;
+    }
+
     imp::default_colors()
 }
 

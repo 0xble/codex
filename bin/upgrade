@@ -7,6 +7,11 @@ install_dir="$HOME/.local/opt/codex/local/libexec"
 bin_dir="$HOME/.local/bin"
 bin_path="$bin_dir/codex"
 src="$codex_rs_dir/target/release/codex"
+source_version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$codex_rs_dir/Cargo.toml" | head -n 1)"
+if [[ -z "$source_version" ]]; then
+  echo "error: unable to read Codex source version from $codex_rs_dir/Cargo.toml" >&2
+  exit 1
+fi
 
 cd "$codex_rs_dir"
 cargo build --release -p codex-cli
@@ -73,4 +78,10 @@ chmod 0755 "$tmp_bin"
 mv -f "$tmp_bin" "$bin_path"
 
 echo "installed: $install_dir/codex"
-"$install_dir/codex" --version
+installed_version="$("$install_dir/codex" --version)"
+echo "$installed_version"
+
+if [[ "$installed_version" != "codex-cli $source_version" ]]; then
+  echo "error: installed Codex version does not match source version $source_version" >&2
+  exit 1
+fi

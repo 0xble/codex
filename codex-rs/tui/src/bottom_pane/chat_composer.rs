@@ -4143,6 +4143,8 @@ impl Renderable for ChatComposer {
     fn cursor_style(&self, _area: Rect) -> crossterm::cursor::SetCursorStyle {
         if self.draft.textarea.uses_vim_insert_cursor() {
             crossterm::cursor::SetCursorStyle::SteadyBar
+        } else if self.draft.textarea.is_vim_normal_mode() {
+            crossterm::cursor::SetCursorStyle::SteadyBlock
         } else {
             crossterm::cursor::SetCursorStyle::DefaultUserShape
         }
@@ -5931,7 +5933,7 @@ mod tests {
     }
 
     #[test]
-    fn vim_insert_uses_bar_cursor_style() {
+    fn vim_modes_use_explicit_cursor_styles() {
         use crate::render::renderable::Renderable;
         use crossterm::cursor::SetCursorStyle;
         use crossterm::event::KeyCode;
@@ -5955,19 +5957,20 @@ mod tests {
             output
         };
         let default = style_output(SetCursorStyle::DefaultUserShape);
+        let steady_block = style_output(SetCursorStyle::SteadyBlock);
         let steady_bar = style_output(SetCursorStyle::SteadyBar);
 
         assert_eq!(style_output(composer.cursor_style(area)), default,);
 
         composer.set_vim_enabled(/*enabled*/ true);
-        assert_eq!(style_output(composer.cursor_style(area)), default,);
+        assert_eq!(style_output(composer.cursor_style(area)), steady_block);
 
         composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
         composer.set_text_content("hey".to_string(), Vec::new(), Vec::new());
         assert_eq!(style_output(composer.cursor_style(area)), steady_bar);
 
         composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        assert_eq!(style_output(composer.cursor_style(area)), default,);
+        assert_eq!(style_output(composer.cursor_style(area)), steady_block);
     }
 
     #[test]

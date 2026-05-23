@@ -24,9 +24,12 @@
 use std::io;
 use std::io::Write;
 
+use codex_terminal_detection::TerminalTransport;
+use codex_terminal_detection::terminal_transport;
 use crossterm::cursor::MoveTo;
 use crossterm::cursor::SetCursorStyle;
 use crossterm::queue;
+use crossterm::style::Color as CrosstermColor;
 use crossterm::style::Colors;
 use crossterm::style::Print;
 use crossterm::style::SetAttribute;
@@ -134,6 +137,14 @@ impl Frame<'_> {
     /// After drawing this frame, set the terminal's visible cursor style.
     pub fn set_cursor_style(&mut self, style: SetCursorStyle) {
         self.cursor_style = style;
+    }
+
+    /// Draw a block cursor into the frame buffer and hide the terminal cursor.
+    pub fn emulate_block_cursor<P: Into<Position>>(&mut self, position: P) {
+        if let Some(cell) = self.buffer.cell_mut(position) {
+            cell.modifier.insert(Modifier::REVERSED);
+        }
+        self.cursor_position = None;
     }
 
     /// Gets the buffer that this `Frame` draws into as a mutable reference.
@@ -651,6 +662,17 @@ fn draw<I>(writer: &mut impl Write, commands: I) -> io::Result<()>
 where
     I: Iterator<Item = DrawCommand>,
 {
+    draw_with_transport(writer, commands, terminal_transport())
+}
+
+fn draw_with_transport<I>(
+    writer: &mut impl Write,
+    commands: I,
+    transport: Option<TerminalTransport>,
+) -> io::Result<()>
+where
+    I: Iterator<Item = DrawCommand>,
+{
     let mut fg = Color::Reset;
     let mut bg = Color::Reset;
     let mut modifier = Modifier::empty();
@@ -667,21 +689,25 @@ where
         last_pos = Some(Position { x, y });
         match command {
             DrawCommand::Put { cell, .. } => {
-                if cell.modifier != modifier {
+                let style = rendered_cell_style(&cell, transport);
+                if style.modifier != modifier {
                     let diff = ModifierDiff {
                         from: modifier,
-                        to: cell.modifier,
+                        to: style.modifier,
                     };
                     diff.queue(writer)?;
-                    modifier = cell.modifier;
+                    modifier = style.modifier;
                 }
-                if cell.fg != fg || cell.bg != bg {
+                if style.fg != fg || style.bg != bg {
                     queue!(
                         writer,
-                        SetColors(Colors::new(cell.fg.into(), cell.bg.into()))
+                        SetColors(Colors::new(
+                            to_crossterm_color(style.fg),
+                            to_crossterm_color(style.bg),
+                        ))
                     )?;
-                    fg = cell.fg;
-                    bg = cell.bg;
+                    fg = style.fg;
+                    bg = style.bg;
                 }
 
                 queue!(writer, Print(cell.symbol()))?;
@@ -689,7 +715,7 @@ where
             DrawCommand::ClearToEnd { bg: clear_bg, .. } => {
                 queue!(writer, SetAttribute(crossterm::style::Attribute::Reset))?;
                 modifier = Modifier::empty();
-                queue!(writer, SetBackgroundColor(clear_bg.into()))?;
+                queue!(writer, SetBackgroundColor(to_crossterm_color(clear_bg)))?;
                 bg = clear_bg;
                 queue!(writer, Clear(crossterm::terminal::ClearType::UntilNewLine))?;
             }
@@ -704,6 +730,53 @@ where
     )?;
 
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RenderedCellStyle {
+    fg: Color,
+    bg: Color,
+    modifier: Modifier,
+}
+
+fn rendered_cell_style(cell: &Cell, transport: Option<TerminalTransport>) -> RenderedCellStyle {
+    let mut fg = cell.fg;
+    let bg = cell.bg;
+    let mut modifier = cell.modifier;
+
+    if matches!(transport, Some(TerminalTransport::Mosh))
+        && fg == Color::Reset
+        && modifier.contains(Modifier::DIM)
+    {
+        fg = Color::Indexed(8);
+        modifier.remove(Modifier::DIM);
+    }
+
+    RenderedCellStyle { fg, bg, modifier }
+}
+
+fn to_crossterm_color(color: Color) -> CrosstermColor {
+    match color {
+        Color::Reset => CrosstermColor::Reset,
+        Color::Black => CrosstermColor::Black,
+        Color::Red => CrosstermColor::DarkRed,
+        Color::Green => CrosstermColor::DarkGreen,
+        Color::Yellow => CrosstermColor::DarkYellow,
+        Color::Blue => CrosstermColor::DarkBlue,
+        Color::Magenta => CrosstermColor::DarkMagenta,
+        Color::Cyan => CrosstermColor::DarkCyan,
+        Color::Gray => CrosstermColor::Grey,
+        Color::DarkGray => CrosstermColor::DarkGrey,
+        Color::LightRed => CrosstermColor::Red,
+        Color::LightGreen => CrosstermColor::Green,
+        Color::LightYellow => CrosstermColor::Yellow,
+        Color::LightBlue => CrosstermColor::Blue,
+        Color::LightMagenta => CrosstermColor::Magenta,
+        Color::LightCyan => CrosstermColor::Cyan,
+        Color::White => CrosstermColor::White,
+        Color::Indexed(index) => CrosstermColor::AnsiValue(index),
+        Color::Rgb(r, g, b) => CrosstermColor::Rgb { r, g, b },
+    }
 }
 
 /// The `ModifierDiff` struct is used to calculate the difference between two `Modifier`
@@ -776,6 +849,7 @@ impl ModifierDiff {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::style::Colored;
     use pretty_assertions::assert_eq;
     use ratatui::backend::WindowSize;
     use ratatui::layout::Rect;
@@ -882,6 +956,67 @@ mod tests {
     }
 
     #[test]
+    fn mosh_visual_fallback_replaces_default_dim_text_with_dark_gray() {
+        let mut cell = Cell::new("x");
+        cell.fg = Color::Reset;
+        cell.modifier = Modifier::DIM;
+
+        let style = rendered_cell_style(&cell, Some(TerminalTransport::Mosh));
+
+        assert_eq!(style.fg, Color::Indexed(8));
+        assert_eq!(style.bg, Color::Reset);
+        assert!(!style.modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn mosh_visual_fallback_preserves_explicit_dim_foreground() {
+        let mut cell = Cell::new("x");
+        cell.fg = Color::Blue;
+        cell.modifier = Modifier::DIM;
+
+        let style = rendered_cell_style(&cell, Some(TerminalTransport::Mosh));
+
+        assert_eq!(style.fg, Color::Blue);
+        assert!(style.modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn mosh_visual_fallback_dim_render_snapshot() {
+        let mut cell = Cell::new("muted");
+        cell.fg = Color::Reset;
+        cell.modifier = Modifier::DIM;
+        let mut output = Vec::new();
+        let ansi_color_was_disabled = Colored::ansi_color_disabled_memoized();
+        Colored::set_ansi_color_disabled(false);
+
+        draw_with_transport(
+            &mut output,
+            std::iter::once(DrawCommand::Put { x: 0, y: 0, cell }),
+            Some(TerminalTransport::Mosh),
+        )
+        .expect("draw should render");
+
+        Colored::set_ansi_color_disabled(ansi_color_was_disabled);
+        let rendered = String::from_utf8(output).expect("output should be utf-8");
+        insta::assert_debug_snapshot!(
+            rendered,
+            @r###""\u{1b}[1;1H\u{1b}[38;5;8;49mmuted\u{1b}[39m\u{1b}[49m\u{1b}[0m""###
+        );
+    }
+
+    #[test]
+    fn non_mosh_transport_preserves_default_dim_modifier() {
+        let mut cell = Cell::new("x");
+        cell.fg = Color::Reset;
+        cell.modifier = Modifier::DIM;
+
+        let style = rendered_cell_style(&cell, None);
+
+        assert_eq!(style.fg, Color::Reset);
+        assert!(style.modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
     fn diff_buffers_does_not_emit_clear_to_end_for_full_width_row() {
         let area = Rect::new(0, 0, 3, 2);
         let previous = Buffer::empty(area);
@@ -949,6 +1084,28 @@ mod tests {
         assert!(
             actual.contains(&expected),
             "expected terminal output to contain cursor style {expected:?}, got {actual:?}"
+        );
+    }
+
+    #[test]
+    fn terminal_draw_can_emulate_block_cursor_in_buffer() {
+        let mut terminal =
+            Terminal::with_options(CaptureBackend::new(/*width*/ 2, /*height*/ 1))
+                .expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 2, 1));
+
+        terminal
+            .try_draw(|frame| {
+                frame.buffer_mut().set_string(0, 0, "x", Style::default());
+                frame.emulate_block_cursor((0, 0));
+                io::Result::Ok(())
+            })
+            .expect("draw");
+
+        let actual = terminal.backend().output();
+        assert!(
+            actual.contains("\u{1b}[7m"),
+            "expected terminal output to contain reverse-video cursor cell, got {actual:?}"
         );
     }
 
