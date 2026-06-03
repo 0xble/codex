@@ -455,6 +455,97 @@ async fn review_start_rejects_empty_custom_instructions() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn review_start_rejects_unbounded_review_context_fields() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let thread_id = start_default_thread(&mut mcp).await?;
+
+    let cases = vec![
+        (
+            ReviewTarget::Custom {
+                instructions: "Review".to_string(),
+            },
+            Some("x".repeat(4_001)),
+            None,
+            "supplementalInstructions must not exceed",
+        ),
+        (
+            ReviewTarget::Custom {
+                instructions: "x".repeat(4_001),
+            },
+            None,
+            None,
+            "instructions must not exceed",
+        ),
+        (
+            ReviewTarget::Custom {
+                instructions: "Review".to_string(),
+            },
+            None,
+            Some((0..101).map(|idx| format!("src/{idx}.rs")).collect()),
+            "pathspecs must not contain more than",
+        ),
+        (
+            ReviewTarget::Custom {
+                instructions: "Review".to_string(),
+            },
+            None,
+            Some(vec![format!("src/{}", "a".repeat(513))]),
+            "pathspecs must not contain paths longer than",
+        ),
+        (
+            ReviewTarget::Custom {
+                instructions: "Review".to_string(),
+            },
+            None,
+            Some(vec!["src/lib.rs\nextra".to_string()]),
+            "pathspecs must not contain control characters",
+        ),
+        (
+            ReviewTarget::Custom {
+                instructions: "Review".to_string(),
+            },
+            None,
+            Some(
+                (0..17)
+                    .map(|idx| format!("src/{idx}/{}", "a".repeat(500)))
+                    .collect(),
+            ),
+            "pathspecs must not exceed",
+        ),
+    ];
+
+    for (target, supplemental_instructions, pathspecs, expected_message) in cases {
+        let request_id = mcp
+            .send_review_start_request(ReviewStartParams {
+                thread_id: thread_id.clone(),
+                delivery: Some(ReviewDelivery::Inline),
+                supplemental_instructions,
+                pathspecs,
+                target,
+            })
+            .await?;
+        let error: JSONRPCError = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
+        assert!(
+            error.error.message.contains(expected_message),
+            "expected message containing {expected_message:?}, got: {}",
+            error.error.message
+        );
+    }
+
+    Ok(())
+}
+
 async fn start_default_thread(mcp: &mut TestAppServer) -> Result<String> {
     let thread_req = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams {

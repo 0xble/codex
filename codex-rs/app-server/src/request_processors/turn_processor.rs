@@ -65,6 +65,11 @@ fn validate_response_item_image_urls(items: &[ResponseItem]) -> Result<(), JSONR
     Ok(())
 }
 
+const MAX_REVIEW_TEXT_CHARS: usize = 4_000;
+const MAX_REVIEW_PATHSPECS: usize = 100;
+const MAX_REVIEW_PATHSPEC_CHARS: usize = 512;
+const MAX_REVIEW_PATHSPECS_TOTAL_CHARS: usize = 8_000;
+
 #[derive(Clone)]
 pub(crate) struct TurnRequestProcessor {
     auth_manager: Arc<AuthManager>,
@@ -359,6 +364,10 @@ impl TurnRequestProcessor {
                 let trimmed = text.trim().to_string();
                 if trimmed.is_empty() {
                     Err(invalid_request(format!("{field} must not be empty")))
+                } else if trimmed.chars().count() > MAX_REVIEW_TEXT_CHARS {
+                    Err(invalid_request(format!(
+                        "{field} must not exceed {MAX_REVIEW_TEXT_CHARS} characters"
+                    )))
                 } else {
                     Ok(trimmed)
                 }
@@ -369,20 +378,51 @@ impl TurnRequestProcessor {
     fn normalize_review_pathspecs(
         pathspecs: Option<Vec<String>>,
     ) -> Result<Vec<String>, JSONRPCErrorError> {
+        let pathspecs = pathspecs.unwrap_or_default();
+        if pathspecs.len() > MAX_REVIEW_PATHSPECS {
+            return Err(invalid_request(format!(
+                "pathspecs must not contain more than {MAX_REVIEW_PATHSPECS} paths"
+            )));
+        }
+
+        let mut total_chars = 0usize;
         pathspecs
-            .unwrap_or_default()
             .into_iter()
             .map(|pathspec| {
                 let trimmed = pathspec.trim().to_string();
+                let char_count = trimmed.chars().count();
                 if trimmed.is_empty() {
                     Err(invalid_request(
                         "pathspecs must not contain empty paths".to_string(),
                     ))
+                } else if char_count > MAX_REVIEW_PATHSPEC_CHARS {
+                    Err(invalid_request(format!(
+                        "pathspecs must not contain paths longer than {MAX_REVIEW_PATHSPEC_CHARS} characters"
+                    )))
+                } else if trimmed.chars().any(char::is_control) {
+                    Err(invalid_request(
+                        "pathspecs must not contain control characters".to_string(),
+                    ))
                 } else {
-                    Ok(trimmed)
+                    total_chars += char_count;
+                    if total_chars > MAX_REVIEW_PATHSPECS_TOTAL_CHARS {
+                        Err(invalid_request(format!(
+                            "pathspecs must not exceed {MAX_REVIEW_PATHSPECS_TOTAL_CHARS} total characters"
+                        )))
+                    } else {
+                        Ok(trimmed)
+                    }
                 }
             })
             .collect()
+    }
+
+    fn normalize_required_review_text(
+        value: String,
+        field: &str,
+    ) -> Result<String, JSONRPCErrorError> {
+        Self::normalize_optional_review_text(Some(value), field)?
+            .ok_or_else(|| invalid_request(format!("{field} must not be empty")))
     }
 
     fn review_request_from_target(
@@ -410,15 +450,9 @@ impl TurnRequestProcessor {
                 ApiReviewTarget::Commit { sha, title }
             }
             ApiReviewTarget::Custom { instructions } => {
-                let trimmed = instructions.trim().to_string();
-                if trimmed.is_empty() {
-                    return Err(invalid_request(
-                        "instructions must not be empty".to_string(),
-                    ));
-                }
-                ApiReviewTarget::Custom {
-                    instructions: trimmed,
-                }
+                let instructions =
+                    Self::normalize_required_review_text(instructions, "instructions")?;
+                ApiReviewTarget::Custom { instructions }
             }
         };
 
@@ -435,7 +469,7 @@ impl TurnRequestProcessor {
             user_facing_hint: Some(hint.clone()),
             supplemental_instructions: Self::normalize_optional_review_text(
                 supplemental_instructions,
-                "supplemental_instructions",
+                "supplementalInstructions",
             )?,
             pathspecs: Self::normalize_review_pathspecs(pathspecs)?,
         };
