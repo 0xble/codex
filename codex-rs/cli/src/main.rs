@@ -291,6 +291,10 @@ struct ReviewSharedCliOptions {
     )]
     pub dangerously_bypass_approvals_and_sandbox: bool,
 
+    /// Bypass hook trust checks.
+    #[arg(long = "dangerously-bypass-hook-trust", default_value_t = false)]
+    pub bypass_hook_trust: bool,
+
     /// Tell the agent to use the specified directory as its working root.
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
@@ -317,6 +321,7 @@ impl ReviewSharedCliOptions {
         shared.sandbox_mode = self.sandbox_mode;
         shared.dangerously_bypass_approvals_and_sandbox =
             self.dangerously_bypass_approvals_and_sandbox;
+        shared.bypass_hook_trust = self.bypass_hook_trust;
         shared.cwd = self.cwd;
         shared.add_dir = self.add_dir;
         shared.inherit_exec_root_options(root);
@@ -3623,6 +3628,28 @@ mod tests {
             cli.subcommand,
             Some(Subcommand::ExecServer(ExecServerCommand {
                 strict_config: true,
+                ..
+            }))
+        );
+    }
+
+    #[test]
+    fn review_accepts_hook_trust_bypass_flag() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "review",
+            "--dangerously-bypass-hook-trust",
+            "--uncommitted",
+        ])
+        .expect("parse");
+
+        assert_matches!(
+            cli.subcommand,
+            Some(Subcommand::Review(ReviewCli {
+                shared: ReviewSharedCliOptions {
+                    bypass_hook_trust: true,
+                    ..
+                },
                 ..
             }))
         );
