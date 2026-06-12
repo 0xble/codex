@@ -85,9 +85,9 @@ impl SessionTask for ReviewTask {
             None => None,
         };
         if !cancellation_token.is_cancelled() {
-            return Some(
+            return Ok(Some(
                 exit_review_mode(session.clone_session(), output.clone(), ctx.clone()).await,
-            );
+            ));
         }
         Ok(None)
     }
