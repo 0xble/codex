@@ -1869,6 +1869,11 @@ pub struct EnteredReviewModeEvent {
     pub user_facing_hint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub supplemental_instructions: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pathspecs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub turn_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -5508,6 +5513,8 @@ mod tests {
                     instructions: "review this".into(),
                 },
                 user_facing_hint: "Review requested.".into(),
+                supplemental_instructions: None,
+                pathspecs: Vec::new(),
             }),
         };
         let exited = ItemCompletedEvent {
@@ -5532,6 +5539,7 @@ mod tests {
                 user_facing_hint: Some(user_facing_hint),
                 turn_id: Some(turn_id),
                 item_id: Some(item_id),
+                ..
             })]
                 if instructions == "review this"
                     && user_facing_hint == "Review requested."
@@ -5594,6 +5602,8 @@ mod tests {
         .unwrap();
         assert_eq!(entered.turn_id, None);
         assert_eq!(entered.item_id, None);
+        assert_eq!(entered.supplemental_instructions, None);
+        assert_eq!(entered.pathspecs, Vec::<String>::new());
 
         let exited = serde_json::from_value::<ExitedReviewModeEvent>(json!({
             "review_output": null

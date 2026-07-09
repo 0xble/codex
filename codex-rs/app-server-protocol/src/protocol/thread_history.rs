@@ -1758,6 +1758,8 @@ mod tests {
                     instructions: "review this".into(),
                 },
                 user_facing_hint: Some("Review requested.".into()),
+                supplemental_instructions: None,
+                pathspecs: Vec::new(),
                 turn_id: Some("turn-1".into()),
                 item_id: Some("entered-review".into()),
             }),
@@ -1808,6 +1810,8 @@ mod tests {
                 instructions: "review this".into(),
             },
             user_facing_hint: "Review requested.".into(),
+            supplemental_instructions: None,
+            pathspecs: Vec::new(),
         });
         let exited = CoreTurnItem::ExitedReviewMode(CoreExitedReviewModeItem {
             id: "exited-review".into(),

@@ -114,6 +114,8 @@ impl EnteredReviewModeItem {
         EventMsg::EnteredReviewMode(EnteredReviewModeEvent {
             target: self.target.clone(),
             user_facing_hint: Some(self.user_facing_hint.clone()),
+            supplemental_instructions: self.supplemental_instructions.clone(),
+            pathspecs: self.pathspecs.clone(),
             turn_id: Some(turn_id),
             item_id: Some(self.id.clone()),
         })

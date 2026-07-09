@@ -139,6 +139,11 @@ pub struct EnteredReviewModeItem {
     pub id: String,
     pub target: ReviewTarget,
     pub user_facing_hint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub supplemental_instructions: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pathspecs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
