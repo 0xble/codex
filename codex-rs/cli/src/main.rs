@@ -334,22 +334,6 @@ impl ReviewSharedCliOptions {
 }
 
 #[derive(Debug, Parser)]
-#[command(bin_name = "codex plugin")]
-struct PluginCli {
-    #[clap(flatten)]
-    pub config_overrides: CliConfigOverrides,
-
-    #[command(subcommand)]
-    subcommand: PluginSubcommand,
-}
-
-#[derive(Debug, clap::Subcommand)]
-enum PluginSubcommand {
-    /// Manage plugin marketplaces for Codex.
-    Marketplace(MarketplaceCli),
-}
-
-#[derive(Debug, Parser)]
 struct CompletionCommand {
     /// Shell to generate completions for
     #[clap(value_enum, default_value_t = Shell::Bash)]
@@ -3133,9 +3117,9 @@ mod tests {
             review.last_message_file,
             Some(std::path::PathBuf::from("/tmp/review-output.md"))
         );
-        assert_eq!(review.review.base_commit.as_deref(), Some("abc123"));
+        assert_eq!(review.args.base_commit.as_deref(), Some("abc123"));
         assert_eq!(
-            review.review.files,
+            review.args.files,
             vec![std::path::PathBuf::from("src/lib.rs")]
         );
     }
