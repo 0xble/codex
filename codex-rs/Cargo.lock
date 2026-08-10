@@ -3281,7 +3281,7 @@ dependencies = [
 
 [[package]]
 name = "codex-history"
-version = "0.0.0"
+version = "0.148.0-0xble.2.2.0"
 dependencies = [
  "anyhow",
  "codex-protocol",
