@@ -686,6 +686,8 @@ async fn review_uses_updated_turn_permissions_and_approval_policy() {
                     instructions: "review current permissions".to_string(),
                 },
                 user_facing_hint: None,
+                supplemental_instructions: None,
+                pathspecs: Vec::new(),
             },
         })
         .await

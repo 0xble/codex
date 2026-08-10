@@ -74,6 +74,7 @@ fn transcript_export_excludes_hidden_review_prompts_and_nested_duplicates() {
     let exited_review = ThreadItem::ExitedReviewMode {
         id: "review-exit".to_string(),
         review: "review".to_string(),
+        review_output: None,
     };
     let duplicate_one = user("duplicate-one", "duplicate review prompt");
     let duplicate_two = user("duplicate-two", "duplicate review prompt");
