@@ -939,8 +939,7 @@ impl TurnRequestProcessor {
         &self,
         params: ThreadInjectItemsParams,
     ) -> Result<ThreadInjectItemsResponse, JSONRPCErrorError> {
-        let thread_id = params.thread_id;
-        let (_, thread) = self.load_thread(&thread_id).await?;
+        let (thread_id, thread) = self.load_thread(&params.thread_id).await?;
 
         let items = params
             .items
