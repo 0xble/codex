@@ -4,6 +4,8 @@ use codex_agent_extension::AgentInvocation;
 use codex_agent_extension::AgentRun;
 use codex_agent_extension::AgentRunner;
 use codex_app_server_protocol::ImageReference as V2ImageReference;
+use codex_goal_extension::AutoResumeSource;
+use codex_goal_extension::GoalService;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -91,6 +93,8 @@ pub(crate) struct TurnRequestProcessor {
     thread_watch_manager: ThreadWatchManager,
     skills_watcher: Arc<SkillsWatcher>,
     turn_cost_worker: Option<crate::turn_cost_worker::TurnCostWorkerHandle>,
+    goal_service: Arc<GoalService>,
+    state_db: Option<StateDbHandle>,
 }
 
 fn map_additional_context(
@@ -153,6 +157,8 @@ impl TurnRequestProcessor {
         thread_watch_manager: ThreadWatchManager,
         skills_watcher: Arc<SkillsWatcher>,
         turn_cost_worker: Option<crate::turn_cost_worker::TurnCostWorkerHandle>,
+        goal_service: Arc<GoalService>,
+        state_db: Option<StateDbHandle>,
     ) -> Self {
         let agent_runner = AgentRunner::new(Arc::downgrade(&thread_manager));
         Self {
@@ -168,6 +174,8 @@ impl TurnRequestProcessor {
             thread_watch_manager,
             skills_watcher,
             turn_cost_worker,
+            goal_service,
+            state_db,
         }
     }
 
@@ -593,6 +601,29 @@ impl TurnRequestProcessor {
 
         let additional_context = map_additional_context(params.additional_context);
         let turn_has_input = !params.input.is_empty();
+        let auto_resume_source = if params
+            .turn_trigger
+            .as_deref()
+            .is_some_and(|trigger| matches!(trigger, "agent" | "background" | "delegation"))
+        {
+            AutoResumeSource::Background
+        } else {
+            AutoResumeSource::User
+        };
+        let mut auto_resume_parts = params
+            .input
+            .iter()
+            .filter_map(|item| match item {
+                V2UserInput::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if let Some(output) = params.tool_output.as_ref()
+            && let Some(text) = output.output.to_text()
+        {
+            auto_resume_parts.push(text);
+        }
+        let auto_resume_text = auto_resume_parts.join("\n");
         let input = if let Some(tool_output) = params.tool_output {
             let item = ResponseItem::FunctionCallOutput {
                 id: None,
@@ -681,6 +712,16 @@ impl TurnRequestProcessor {
                 return Err(error);
             }
         };
+
+        if !auto_resume_text.is_empty()
+            && let Some(state_db) = self.state_db.as_ref()
+            && let Err(error) = self
+                .goal_service
+                .auto_resume_for_input(state_db, thread_id, &auto_resume_text, auto_resume_source)
+                .await
+        {
+            tracing::warn!(%error, "failed to auto-resume goal after turn submission");
+        }
 
         if turn_has_input && started {
             let config_snapshot = thread.config_snapshot().await;

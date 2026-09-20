@@ -13,6 +13,8 @@ use codex_protocol::protocol::ThreadGoalUpdatedEvent;
 use codex_protocol::protocol::validate_thread_goal_objective;
 use codex_rollout::RolloutItem;
 
+use crate::auto_resume::AutoResumeSource;
+use crate::auto_resume::should_auto_resume;
 use crate::runtime::GoalRuntimeHandle;
 use crate::runtime::PreviousGoalSnapshot;
 use crate::tool::fill_empty_thread_preview_if_possible;
@@ -139,6 +141,46 @@ impl GoalService {
             .await
             .map(|goal| goal.map(protocol_goal_from_state))
             .map_err(|err| GoalServiceError::Internal(format!("failed to read thread goal: {err}")))
+    }
+
+    /// Resumes a paused or blocked goal when new input provides a clear
+    /// continuation signal or reports successful background progress.
+    pub async fn auto_resume_for_input(
+        &self,
+        state_db: &codex_state::StateRuntime,
+        thread_id: ThreadId,
+        text: &str,
+        source: AutoResumeSource,
+    ) -> Result<bool, GoalServiceError> {
+        let Some(goal) = state_db
+            .thread_goals()
+            .get_thread_goal(thread_id)
+            .await
+            .map_err(|err| {
+                GoalServiceError::Internal(format!("failed to read thread goal: {err}"))
+            })?
+        else {
+            return Ok(false);
+        };
+        let protocol_goal = protocol_goal_from_state(&goal);
+        if !should_auto_resume(protocol_goal.status, &protocol_goal.objective, text, source) {
+            return Ok(false);
+        }
+
+        let outcome = self
+            .set_thread_goal(
+                state_db,
+                GoalSetRequest {
+                    thread_id,
+                    objective: GoalObjectiveUpdate::Keep,
+                    status: Some(ThreadGoalStatus::Active),
+                    token_budget: GoalTokenBudgetUpdate::Keep,
+                    max_goal_token_budget: None,
+                },
+            )
+            .await?;
+        outcome.apply_runtime_effects(self).await;
+        Ok(true)
     }
 
     pub async fn set_thread_goal(

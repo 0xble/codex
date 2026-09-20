@@ -527,6 +527,8 @@ impl MessageProcessor {
             thread_watch_manager,
             Arc::clone(&skills_watcher),
             turn_cost_worker.as_ref().map(TurnCostWorker::handle),
+            Arc::clone(&goal_service),
+            state_db.clone(),
         );
         if let Some(startup_config) = plugin_startup_tasks {
             // Keep plugin startup warmups aligned at app-server startup.
