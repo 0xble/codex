@@ -463,6 +463,8 @@ impl MessageProcessor {
             thread_watch_manager,
             thread_list_state_permit,
             Arc::clone(&skills_watcher),
+            Arc::clone(&goal_service),
+            state_db.clone(),
         );
         if matches!(plugin_startup_tasks, crate::PluginStartupTasks::Start) {
             // Keep plugin startup warmups aligned at app-server startup.
