@@ -161,7 +161,7 @@ impl GoalService {
         else {
             return Ok(false);
         };
-        let protocol_goal = protocol_goal_from_state(&goal);
+        let protocol_goal = protocol_goal_from_state(goal);
         if !should_auto_resume(protocol_goal.status, &protocol_goal.objective, text, source) {
             return Ok(false);
         }
@@ -174,7 +174,6 @@ impl GoalService {
                     objective: GoalObjectiveUpdate::Keep,
                     status: Some(ThreadGoalStatus::Active),
                     token_budget: GoalTokenBudgetUpdate::Keep,
-                    max_goal_token_budget: None,
                 },
             )
             .await?;

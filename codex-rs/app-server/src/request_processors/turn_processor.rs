@@ -939,7 +939,8 @@ impl TurnRequestProcessor {
         &self,
         params: ThreadInjectItemsParams,
     ) -> Result<ThreadInjectItemsResponse, JSONRPCErrorError> {
-        let (_, thread) = self.load_thread(&params.thread_id).await?;
+        let thread_id = params.thread_id;
+        let (_, thread) = self.load_thread(&thread_id).await?;
 
         let items = params
             .items
@@ -953,6 +954,7 @@ impl TurnRequestProcessor {
             .map_err(invalid_request)?;
         validate_response_item_image_urls(&items)?;
 
+        let result_text = serde_json::to_string(&items).ok();
         thread
             .inject_response_items(items)
             .await
@@ -960,6 +962,25 @@ impl TurnRequestProcessor {
                 CodexErrorDetails::InvalidRequest(message) => invalid_request(message.clone()),
                 _ => internal_error(format!("failed to inject response items: {err}")),
             })?;
+
+        // Background/delegation callers use response-item injection to deliver results
+        // without starting a user turn. Treat the serialized result as background input
+        // only after successful injection, so a stopped goal can resume when the result
+        // clearly reports relevant progress.
+        if let Some(state_db) = self.state_db.as_ref()
+            && let Some(result_text) = result_text
+            && let Err(error) = self
+                .goal_service
+                .auto_resume_for_input(
+                    state_db,
+                    thread_id,
+                    &result_text,
+                    AutoResumeSource::Background,
+                )
+                .await
+        {
+            tracing::warn!(%error, "failed to auto-resume goal after background result injection");
+        }
         Ok(ThreadInjectItemsResponse {})
     }
 
