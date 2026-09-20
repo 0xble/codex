@@ -3,6 +3,7 @@
 mod accounting;
 mod analytics;
 mod api;
+mod auto_resume;
 mod events;
 mod extension;
 mod metrics;
@@ -17,6 +18,7 @@ pub use api::GoalServiceError;
 pub use api::GoalSetOutcome;
 pub use api::GoalSetRequest;
 pub use api::GoalTokenBudgetUpdate;
+pub use auto_resume::AutoResumeSource;
 pub use extension::GoalExtension;
 pub use extension::GoalExtensionConfig;
 pub use extension::install_with_backend;
