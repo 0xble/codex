@@ -2387,6 +2387,28 @@ async fn wait_for_mcp_calls(calls: &Arc<Mutex<Vec<HookMcpCall>>>, count: usize) 
 
 #[tokio::test(flavor = "current_thread")]
 async fn executor_hooks_log_only_executed_metadata() {
+    // Other parallel tests exercise these same tracing callsites without a
+    // subscriber. Capture them in a fresh test process so process-wide interest
+    // caching cannot suppress the events or mix in unrelated hook executions.
+    if std::env::var_os("CODEX_HOOK_LOG_CAPTURE_TEST").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "engine::tests::executor_hooks_log_only_executed_metadata",
+                "--nocapture",
+            ])
+            .env("CODEX_HOOK_LOG_CAPTURE_TEST", "1")
+            .output()
+            .expect("isolated hook log capture test");
+        assert!(
+            output.status.success()
+                && String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"),
+            "isolated hook log capture failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     #[derive(Clone)]
     struct LogWriter(Arc<Mutex<Vec<u8>>>);
     impl std::io::Write for LogWriter {
@@ -2406,7 +2428,6 @@ async fn executor_hooks_log_only_executed_metadata() {
         .without_time()
         .with_writer(move || writer.clone())
         .finish();
-    // This test uses Tokio's current-thread runtime, including background hook tasks.
     let _guard = tracing::subscriber::set_default(subscriber);
     let (mut engine, calls, request, _, mut source) = executor_stop_hook_fixture();
     engine.mcp_executor = Arc::new(StaticMcpExecutor {
