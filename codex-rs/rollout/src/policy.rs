@@ -130,6 +130,17 @@ fn persisted_event_msg(
 ) -> Option<Cow<'_, EventMsg>> {
     match ev {
         EventMsg::ItemCompleted(event) => persisted_item_completed_event(ev, event, history_mode),
+        // Keep hook outcomes auditable without duplicating injected context or output.
+        EventMsg::HookStarted(event) => {
+            let mut event = event.clone();
+            event.run.entries.clear();
+            Some(Cow::Owned(EventMsg::HookStarted(event)))
+        }
+        EventMsg::HookCompleted(event) => {
+            let mut event = event.clone();
+            event.run.entries.clear();
+            Some(Cow::Owned(EventMsg::HookCompleted(event)))
+        }
         EventMsg::TokenCount(_)
         | EventMsg::ThreadGoalUpdated(_)
         | EventMsg::ThreadRolledBack(_)
@@ -209,8 +220,6 @@ fn persisted_event_msg(
         | EventMsg::ShutdownComplete
         | EventMsg::DeprecationNotice(_)
         | EventMsg::ItemStarted(_)
-        | EventMsg::HookStarted(_)
-        | EventMsg::HookCompleted(_)
         | EventMsg::AgentMessageContentDelta(_)
         | EventMsg::PlanDelta(_)
         | EventMsg::ReasoningContentDelta(_)

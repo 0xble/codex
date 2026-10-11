@@ -2385,6 +2385,134 @@ async fn wait_for_mcp_calls(calls: &Arc<Mutex<Vec<HookMcpCall>>>, count: usize) 
     .expect("executor hook should complete in the background");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn executor_hooks_log_only_executed_metadata() {
+    #[derive(Clone)]
+    struct LogWriter(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for LogWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("log bytes").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let bytes = Arc::new(Mutex::new(Vec::new()));
+    let writer = LogWriter(Arc::clone(&bytes));
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_ansi(false)
+        .without_time()
+        .with_writer(move || writer.clone())
+        .finish();
+    // This test uses Tokio's current-thread runtime, including background hook tasks.
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let (mut engine, calls, request, _, mut source) = executor_stop_hook_fixture();
+    engine.mcp_executor = Arc::new(StaticMcpExecutor {
+        calls: Arc::clone(&calls),
+        output: "private executor output".to_string(),
+        outputs_by_tool: HashMap::new(),
+    });
+    source.mcp_environment_id = Some("mcp-environment-a".to_string());
+    engine.set_executor_hooks(vec![source.clone()]);
+    let outcome = engine.run_stop(request.clone()).await;
+    assert!(outcome.hook_events.is_empty());
+    assert!(!outcome.should_stop);
+    assert!(!outcome.should_block);
+    wait_for_mcp_calls(&calls, 1).await;
+    tokio::task::yield_now().await;
+
+    let HookHandlerConfig::McpTool { input, .. } = &mut source.hooks.stop[0].hooks[0] else {
+        panic!("MCP hook fixture");
+    };
+    input.insert(
+        "private".to_string(),
+        serde_json::json!("private executor payload"),
+    );
+    input.insert("missing".to_string(), serde_json::json!("${missing_field}"));
+    engine.set_executor_hooks(vec![source]);
+    let outcome = engine.run_stop(request.clone()).await;
+    assert!(outcome.hook_events.is_empty());
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let text =
+                String::from_utf8(bytes.lock().expect("log bytes").clone()).expect("UTF-8 logs");
+            if text.contains("status=Failed") {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("background failure should be logged");
+    assert_eq!(calls.lock().expect("MCP calls").len(), 1);
+
+    let text = String::from_utf8(bytes.lock().expect("log bytes").clone()).expect("UTF-8 logs");
+    let started = text
+        .lines()
+        .filter(|line| line.contains("hook started"))
+        .collect::<Vec<_>>();
+    let completed = text
+        .lines()
+        .filter(|line| line.contains("hook completed"))
+        .collect::<Vec<_>>();
+    assert_eq!(started.len(), 2, "captured logs: {text}");
+    assert_eq!(completed.len(), 2, "captured logs: {text}");
+    let ids = regex::Regex::new(r"execution_id=([0-9a-f-]+)").expect("execution ID pattern");
+    for (start, end) in started.iter().zip(&completed) {
+        assert_eq!(
+            ids.captures(start).expect("start ID")[1],
+            ids.captures(end).expect("end ID")[1]
+        );
+        assert!(end.contains("handler_id=stop:0:executor-a:"));
+        assert!(end.contains("event_name=\"Stop\""));
+        assert!(
+            end.contains("source_uri=\"file:///plugins/computer-use/.codex-plugin/plugin.json\"")
+        );
+        assert!(end.contains("mcp_environment_id=\"mcp-environment-a\""));
+        assert!(end.contains("duration_ms="));
+    }
+    assert_ne!(
+        ids.captures(started[0]).unwrap()[1],
+        ids.captures(started[1]).unwrap()[1]
+    );
+    assert!(completed[0].contains("status=Completed"));
+    assert!(completed[1].contains("status=Failed"));
+    assert!(!text.contains("private executor output"));
+    assert!(!text.contains("private executor payload"));
+
+    engine.mcp_executor = Arc::new(StaticMcpExecutor {
+        calls: Arc::clone(&calls),
+        output: r#"{"decision":"block","reason":"regular hook blocked"}"#.to_string(),
+        outputs_by_tool: HashMap::new(),
+    });
+    let mut blocker = engine.handlers[0].clone();
+    blocker.builtin = false;
+    blocker.source_path = cwd().join("hooks.json").into();
+    let ConfiguredHandlerKind::McpTool { input, .. } = &mut blocker.kind else {
+        panic!("MCP blocker fixture");
+    };
+    input.clear();
+    engine.handlers.push(blocker);
+    let outcome = engine.run_stop(request).await;
+    assert!(outcome.should_block);
+    tokio::task::yield_now().await;
+    let text = String::from_utf8(bytes.lock().expect("log bytes").clone()).expect("UTF-8 logs");
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.contains("hook started"))
+            .count(),
+        2
+    );
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.contains("hook completed"))
+            .count(),
+        2
+    );
+}
+
 #[tokio::test]
 async fn executor_stop_hooks_run_unless_regular_hooks_block_without_stopping() {
     let (mut engine, calls, request, expected_executor_call, _source) =

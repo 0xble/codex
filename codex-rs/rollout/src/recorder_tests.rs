@@ -14,6 +14,17 @@ use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HistoryPosition;
+use codex_protocol::protocol::HookCompletedEvent;
+use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookExecutionMode;
+use codex_protocol::protocol::HookHandlerType;
+use codex_protocol::protocol::HookOutputEntry;
+use codex_protocol::protocol::HookOutputEntryKind;
+use codex_protocol::protocol::HookRunStatus;
+use codex_protocol::protocol::HookRunSummary;
+use codex_protocol::protocol::HookScope;
+use codex_protocol::protocol::HookSource;
+use codex_protocol::protocol::HookStartedEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::SandboxPolicy;
@@ -611,6 +622,112 @@ fn strip_legacy_ghost_snapshot_keeps_checkpoint_metadata_aligned() {
             {"slot": "user"}
         ])
     );
+}
+
+#[tokio::test]
+async fn recorder_preserves_hook_metadata_without_output_in_both_history_modes()
+-> std::io::Result<()> {
+    for history_mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let thread_id = ThreadId::new();
+        let recorder = RolloutRecorder::new(
+            &config,
+            RolloutRecorderParams::new(
+                thread_id,
+                None,
+                None,
+                SessionSource::Exec,
+                None,
+                "test_originator".to_string(),
+                BaseInstructions::default(),
+                Vec::new(),
+            )
+            .with_history_mode(history_mode),
+        )
+        .await?;
+        let run = HookRunSummary {
+            builtin: false,
+            id: "hook-start".to_string(),
+            event_name: HookEventName::SessionStart,
+            handler_type: HookHandlerType::Command,
+            execution_mode: HookExecutionMode::Sync,
+            scope: HookScope::Thread,
+            source_path: home.path().join("hooks.json").abs(),
+            source: HookSource::Plugin,
+            display_order: 3,
+            status: HookRunStatus::Running,
+            status_message: Some("Loading memory".to_string()),
+            started_at: 1_800_000_000_000,
+            completed_at: None,
+            duration_ms: None,
+            entries: vec![
+                HookOutputEntry {
+                    kind: HookOutputEntryKind::Context,
+                    text: "private injected memory".to_string(),
+                },
+                HookOutputEntry {
+                    kind: HookOutputEntryKind::Error,
+                    text: "private hook diagnostic".to_string(),
+                },
+            ],
+        };
+        let mut live_items = vec![RolloutItem::EventMsg(EventMsg::HookStarted(
+            HookStartedEvent {
+                turn_id: None,
+                run: run.clone(),
+            },
+        ))];
+        for status in [
+            HookRunStatus::Completed,
+            HookRunStatus::Failed,
+            HookRunStatus::Blocked,
+            HookRunStatus::Stopped,
+        ] {
+            live_items.push(RolloutItem::EventMsg(EventMsg::HookCompleted(
+                HookCompletedEvent {
+                    turn_id: Some("turn-1".to_string()),
+                    run: HookRunSummary {
+                        id: format!("hook-{status:?}"),
+                        event_name: HookEventName::UserPromptSubmit,
+                        scope: HookScope::Turn,
+                        status,
+                        completed_at: Some(1_800_000_000_025),
+                        duration_ms: Some(25),
+                        ..run.clone()
+                    },
+                },
+            )));
+        }
+        let live_json = serde_json::to_value(&live_items)?;
+        let mut expected_json = live_json.clone();
+        for item in expected_json.as_array_mut().expect("rollout items") {
+            item["payload"]["run"]["entries"] = serde_json::json!([]);
+        }
+        let persisted = crate::persisted_rollout_items(&live_items, history_mode);
+        assert_eq!(serde_json::to_value(&persisted)?, expected_json);
+        assert_eq!(serde_json::to_value(&live_items)?, live_json);
+        assert_eq!(
+            serde_json::to_value(crate::into_persisted_rollout_items(
+                live_items,
+                history_mode,
+            ))?,
+            expected_json
+        );
+
+        recorder.record_canonical_items(&persisted).await?;
+        recorder.flush().await?;
+        let (items, loaded_thread_id, parse_errors) =
+            RolloutRecorder::load_rollout_items(recorder.rollout_path()).await?;
+        assert_eq!(loaded_thread_id, Some(thread_id));
+        assert_eq!(parse_errors, 0);
+        assert_eq!(serde_json::to_value(&items[1..])?, expected_json);
+        let text = fs::read_to_string(recorder.rollout_path())?;
+        assert!(!text.contains("private injected memory"));
+        assert!(!text.contains("private hook diagnostic"));
+        recorder.shutdown().await?;
+    }
+    Ok(())
 }
 
 #[tokio::test]

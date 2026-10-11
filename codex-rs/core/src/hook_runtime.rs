@@ -50,6 +50,7 @@ use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
+use codex_rollout::RolloutItem;
 use codex_rollout::state_db;
 use codex_thread_store::PersistContext;
 use codex_thread_store::ReadThreadParams;
@@ -881,18 +882,18 @@ async fn emit_hook_started_events(
     turn_context: &Arc<TurnContext>,
     preview_runs: Vec<HookRunSummary>,
 ) {
-    for run in preview_runs
-        .into_iter()
-        .filter(should_emit_hook_notification)
-    {
-        sess.send_event(
-            turn_context,
-            EventMsg::HookStarted(HookStartedEvent {
-                turn_id: Some(turn_context.sub_id.clone()),
-                run,
-            }),
-        )
-        .await;
+    for run in preview_runs {
+        let notify = should_emit_hook_notification(&run);
+        let event = EventMsg::HookStarted(HookStartedEvent {
+            turn_id: Some(turn_context.sub_id.clone()),
+            run,
+        });
+        if notify {
+            sess.send_event(turn_context, event).await;
+        } else {
+            sess.persist_rollout_items(&[RolloutItem::EventMsg(event)])
+                .await;
+        }
     }
 }
 
@@ -924,6 +925,11 @@ pub(crate) async fn emit_hook_completed_events(
         if should_emit_hook_notification(&completed.run) {
             sess.send_event(turn_context, EventMsg::HookCompleted(completed))
                 .await;
+        } else {
+            sess.persist_rollout_items(&[RolloutItem::EventMsg(EventMsg::HookCompleted(
+                completed,
+            ))])
+            .await;
         }
     }
 }
@@ -1094,10 +1100,14 @@ mod tests {
     use super::emit_hook_started_events;
     use super::hook_run_analytics_payload;
     use super::hook_run_metric_tags;
+    use crate::session::tests::attach_in_memory_thread_store;
     use crate::session::tests::make_session_and_context;
     use crate::session::tests::make_session_and_context_with_rx;
+    use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::HookCompletedEvent;
+    use codex_protocol::protocol::HookOutputEntryKind;
     use codex_protocol::protocol::HookRunSummary;
+    use codex_rollout::RolloutItem;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
 
@@ -1149,7 +1159,9 @@ mod tests {
             .with_runtime_reader(),
         )
         .expect("in-memory metrics client");
-        let (session, mut turn_context, events) = make_session_and_context_with_rx().await;
+        let (mut session, mut turn_context, events) = make_session_and_context_with_rx().await;
+        attach_in_memory_thread_store(Arc::get_mut(&mut session).expect("single session ref"))
+            .await;
         let turn_context_mut = Arc::get_mut(&mut turn_context).expect("single turn context ref");
         turn_context_mut.session_telemetry = turn_context_mut
             .session_telemetry
@@ -1157,6 +1169,10 @@ mod tests {
             .with_metrics(metrics.clone());
         let mut synchronous_run = sample_hook_run(HookRunStatus::Running, HookSource::User);
         synchronous_run.id = "synchronous-hook".to_string();
+        synchronous_run.entries = vec![codex_protocol::protocol::HookOutputEntry {
+            kind: HookOutputEntryKind::Context,
+            text: "private hook output".to_string(),
+        }];
         let mut asynchronous_run = synchronous_run.clone();
         asynchronous_run.id = "asynchronous-hook".to_string();
         asynchronous_run.execution_mode = HookExecutionMode::Async;
@@ -1181,7 +1197,7 @@ mod tests {
         assert!(matches!(
             started.msg,
             codex_protocol::protocol::EventMsg::HookStarted(event)
-                if event.run.id == synchronous_run.id
+                if event.run.id == synchronous_run.id && event.run.entries == synchronous_run.entries
         ));
         assert!(events.try_recv().is_err());
 
@@ -1212,9 +1228,51 @@ mod tests {
         assert!(matches!(
             completed.msg,
             codex_protocol::protocol::EventMsg::HookCompleted(event)
-                if event.run.id == synchronous_run.id
+                if event.run.id == synchronous_run.id && event.run.entries == synchronous_run.entries
         ));
         assert!(events.try_recv().is_err());
+
+        let history = session
+            .services
+            .thread_store
+            .load_history(codex_thread_store::LoadThreadHistoryParams {
+                thread_id: session.thread_id,
+                include_archived: false,
+            })
+            .await
+            .expect("load hook history");
+        let runs = history
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                RolloutItem::EventMsg(EventMsg::HookStarted(event)) => Some(&event.run),
+                RolloutItem::EventMsg(EventMsg::HookCompleted(event)) => Some(&event.run),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(runs.len(), 6);
+        assert_eq!(
+            runs.iter().map(|run| run.id.as_str()).collect::<Vec<_>>(),
+            vec![
+                "builtin-hook",
+                "asynchronous-hook",
+                "synchronous-hook",
+                "builtin-hook",
+                "asynchronous-hook",
+                "synchronous-hook",
+            ]
+        );
+        assert!(runs.iter().all(|run| run.entries.is_empty()));
+        assert!(
+            runs[..3]
+                .iter()
+                .all(|run| run.status == HookRunStatus::Running)
+        );
+        assert!(
+            runs[3..]
+                .iter()
+                .all(|run| run.status == HookRunStatus::Completed)
+        );
 
         let snapshot = metrics.snapshot().expect("metrics snapshot");
         let counter = snapshot
