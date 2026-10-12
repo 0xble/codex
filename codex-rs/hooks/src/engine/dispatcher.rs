@@ -4,6 +4,7 @@ use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use serde_json::Map;
 use serde_json::Value;
+use tracing::Instrument;
 
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
@@ -27,6 +28,55 @@ pub(crate) struct ParsedHandler<T> {
     pub completed: HookCompletedEvent,
     pub data: T,
     pub completion_order: usize,
+}
+
+pub(crate) fn hook_execution_span(
+    handler: &ConfiguredHandler,
+    turn_id: &Option<String>,
+) -> tracing::Span {
+    let (source_uri, environment_id, mcp_environment_id) = match &handler.source_path {
+        HandlerSourcePath::Local(_) => (String::new(), "", ""),
+        HandlerSourcePath::ExecutorScoped {
+            environment_id,
+            mcp_environment_id,
+            manifest_path,
+            ..
+        } => (
+            manifest_path.to_string(),
+            environment_id.as_str(),
+            mcp_environment_id.as_deref().unwrap_or(environment_id),
+        ),
+    };
+    tracing::info_span!(
+        "hook_execution",
+        execution_id = %uuid::Uuid::new_v4(),
+        handler_id = %handler.run_id(),
+        event_name = hook_event_name_label(handler.event_name),
+        source_path = %handler.source_path,
+        source_uri,
+        environment_id,
+        mcp_environment_id,
+        builtin = handler.builtin,
+        turn_id = ?turn_id,
+    )
+}
+
+pub(crate) fn trace_hook_completion(
+    status: HookRunStatus,
+    started_at: i64,
+    completed_at: i64,
+    duration_ms: i64,
+) {
+    tracing::info!(
+        ?status,
+        started_at,
+        completed_at,
+        duration_ms,
+        "hook completed"
+    );
+    if status == HookRunStatus::Failed {
+        tracing::warn!(?status, "hook failed");
+    }
 }
 
 pub(crate) fn select_handlers(
@@ -169,18 +219,34 @@ pub(crate) async fn execute_handlers_with_metadata<T: 'static>(
             let input_json = input_json.clone();
             let cwd = cwd.to_path_buf();
             let metadata = metadata.cloned();
-            engine.command_runtime.schedule_async_task(async move {
-                let result =
-                    execute_handler(&task_engine, &handler, &input_json, &cwd, metadata.as_ref())
-                        .await;
-                if let Some(error) = result.error {
-                    tracing::warn!(
-                        source_path = %handler.source_path,
-                        %error,
-                        "executor-scoped hook failed"
+            // Executor sources are URIs, not the local paths required by HookRunSummary.
+            // Retain metadata in bounded diagnostics without making cleanup hooks public.
+            let span = hook_execution_span(&handler, &turn_id);
+            engine.command_runtime.schedule_async_task(
+                async move {
+                    tracing::info!(status = "running", "hook started");
+                    let result = execute_handler(
+                        &task_engine,
+                        &handler,
+                        &input_json,
+                        &cwd,
+                        metadata.as_ref(),
+                    )
+                    .await;
+                    let status = if result.error.is_some() {
+                        HookRunStatus::Failed
+                    } else {
+                        HookRunStatus::Completed
+                    };
+                    trace_hook_completion(
+                        status,
+                        result.started_at,
+                        result.completed_at,
+                        result.duration_ms,
                     );
                 }
-            });
+                .instrument(span),
+            );
         }
     }
 

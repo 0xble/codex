@@ -27,6 +27,7 @@ use tokio::process::Command;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio::time::timeout;
+use tracing::Instrument;
 use tracing::Span;
 
 #[cfg(windows)]
@@ -39,10 +40,12 @@ use super::HandlerRunResult;
 use super::dispatcher::ParsedHandler;
 use super::dispatcher::hook_event_name_label;
 use super::dispatcher::hook_execution_mode_label;
+use super::dispatcher::hook_execution_span;
 use super::dispatcher::hook_handler_type_label;
 use super::dispatcher::hook_scope_label;
 use super::dispatcher::hook_source_label;
 use super::dispatcher::scope_for_event;
+use super::dispatcher::trace_hook_completion;
 use crate::output_spill::AdditionalContext;
 use crate::output_spill::HookOutputSpiller;
 use codex_protocol::ThreadId;
@@ -127,46 +130,60 @@ impl CommandHookRuntime {
 
         let result_sender = self.result_sender.clone();
         let runtime = self.clone();
-        self.schedule_async_task(async move {
-            let result = match &handler.kind {
-                ConfiguredHandlerKind::Command { command, env, .. } => {
-                    run_command(&runtime, &handler, command, env, &input_json, &cwd).await
-                }
-                ConfiguredHandlerKind::McpTool { .. } => return,
-            };
-            let mut hook_result = parse(&handler, result, turn_id).completed;
-            let mut entries = Vec::new();
-            let mut warnings = Vec::new();
-
-            for entry in std::mem::take(&mut hook_result.run.entries) {
-                match entry.kind {
-                    HookOutputEntryKind::Context => {
-                        if let Some(text) = runtime
-                            .output_spiller
-                            .maybe_spill_additional_contexts(vec![AdditionalContext {
-                                text: entry.text,
-                                limit: handler.additional_context_limit,
-                            }])
-                            .await
-                            .into_iter()
-                            .next()
-                        {
-                            entries.push(HookOutputEntry {
-                                kind: HookOutputEntryKind::Context,
-                                text,
-                            });
-                        }
+        let span = hook_execution_span(&handler, &turn_id);
+        self.schedule_async_task(
+            async move {
+                tracing::info!(status = "running", "hook started");
+                let result = match &handler.kind {
+                    ConfiguredHandlerKind::Command { command, env, .. } => {
+                        run_command(&runtime, &handler, command, env, &input_json, &cwd).await
                     }
-                    HookOutputEntryKind::Warning => warnings.push(entry),
-                    HookOutputEntryKind::Error => entries.push(entry),
-                    HookOutputEntryKind::Stop | HookOutputEntryKind::Feedback => {}
-                }
-            }
+                    ConfiguredHandlerKind::McpTool { .. } => return,
+                };
+                let (started_at, completed_at, duration_ms) =
+                    (result.started_at, result.completed_at, result.duration_ms);
+                let mut hook_result = parse(&handler, result, turn_id).completed;
+                // Record completion before queue delivery, including when shutdown discards results.
+                trace_hook_completion(
+                    hook_result.run.status,
+                    started_at,
+                    completed_at,
+                    duration_ms,
+                );
+                let mut entries = Vec::new();
+                let mut warnings = Vec::new();
 
-            entries.extend(warnings);
-            hook_result.run.entries = entries;
-            let _ = result_sender.try_send(hook_result);
-        });
+                for entry in std::mem::take(&mut hook_result.run.entries) {
+                    match entry.kind {
+                        HookOutputEntryKind::Context => {
+                            if let Some(text) = runtime
+                                .output_spiller
+                                .maybe_spill_additional_contexts(vec![AdditionalContext {
+                                    text: entry.text,
+                                    limit: handler.additional_context_limit,
+                                }])
+                                .await
+                                .into_iter()
+                                .next()
+                            {
+                                entries.push(HookOutputEntry {
+                                    kind: HookOutputEntryKind::Context,
+                                    text,
+                                });
+                            }
+                        }
+                        HookOutputEntryKind::Warning => warnings.push(entry),
+                        HookOutputEntryKind::Error => entries.push(entry),
+                        HookOutputEntryKind::Stop | HookOutputEntryKind::Feedback => {}
+                    }
+                }
+
+                entries.extend(warnings);
+                hook_result.run.entries = entries;
+                let _ = result_sender.try_send(hook_result);
+            }
+            .instrument(span),
+        );
     }
 
     pub(crate) fn schedule_async_task(&self, task: impl Future<Output = ()> + Send + 'static) {
