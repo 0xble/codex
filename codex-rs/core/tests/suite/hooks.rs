@@ -3291,8 +3291,10 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
     let marker = std::env::temp_dir().join("permissionrequest-exec-command-marker");
     let command = format!("rm -f {}", marker.display());
     let justification = "remove the temporary marker";
+    let command_cwd = tempfile::tempdir()?;
     let args = serde_json::json!({
         "cmd": command,
+        "workdir": command_cwd.path(),
         "login": true,
         "sandbox_permissions": "require_escalated",
         "justification": justification,
@@ -3345,11 +3347,12 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
         "approved exec command should remove marker file"
     );
 
-    assert_single_permission_request_hook_input(
+    let hook_inputs = assert_single_permission_request_hook_input(
         test.codex_home_path(),
         &command,
         Some(justification),
     )?;
+    assert_eq!(hook_inputs[0]["cwd"], serde_json::json!(command_cwd.path()));
 
     Ok(())
 }
@@ -3527,7 +3530,7 @@ async fn pre_tool_use_json_deny_blocks_exec_command_before_execution() -> Result
     let marker_dir = TempDir::new()?;
     let marker = marker_dir.path().join("pretooluse-exec-command-marker");
     let command = format!("git init --quiet {}", marker.display());
-    let args = serde_json::json!({ "cmd": command });
+    let args = serde_json::json!({ "cmd": command, "workdir": marker_dir.path() });
     let responses = mount_sse_sequence(
         &server,
         vec![
@@ -3589,6 +3592,7 @@ async fn pre_tool_use_json_deny_blocks_exec_command_before_execution() -> Result
     assert_eq!(hook_inputs[0]["tool_name"], "Bash");
     assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert_eq!(hook_inputs[0]["cwd"], serde_json::json!(marker_dir.path()));
     let transcript_path = hook_inputs[0]["transcript_path"]
         .as_str()
         .expect("pre tool use hook transcript_path");
@@ -5609,7 +5613,8 @@ async fn post_tool_use_exit_two_replaces_one_shot_exec_command_output_with_feedb
     let server = start_mock_server().await;
     let call_id = "posttooluse-exec-command";
     let command = "printf post-hook-output".to_string();
-    let args = serde_json::json!({ "cmd": command, "tty": false });
+    let command_cwd = tempfile::tempdir()?;
+    let args = serde_json::json!({ "cmd": command, "tty": false, "workdir": command_cwd.path() });
     let responses = mount_sse_sequence(
         &server,
         vec![
@@ -5657,6 +5662,7 @@ async fn post_tool_use_exit_two_replaces_one_shot_exec_command_output_with_feedb
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert_eq!(hook_inputs[0]["cwd"], serde_json::json!(command_cwd.path()));
     assert_eq!(
         hook_inputs[0]["tool_response"],
         Value::String("post-hook-output".to_string())
@@ -5734,8 +5740,10 @@ async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> R
     let start_call_id = "posttooluse-exec-session-start";
     let poll_call_id = "posttooluse-exec-session-poll";
     let command = "sleep 1; printf session-post-hook-output".to_string();
+    let command_cwd = tempfile::tempdir()?;
     let start_args = serde_json::json!({
         "cmd": command,
+        "workdir": command_cwd.path(),
         "shell": "/bin/sh",
         "login": false,
         "tty": false,
@@ -5811,6 +5819,10 @@ async fn post_tool_use_blocks_when_exec_session_completes_via_write_stdin() -> R
     assert_eq!(post_hook_inputs[0]["tool_name"], "Bash");
     assert_eq!(post_hook_inputs[0]["tool_use_id"], start_call_id);
     assert_eq!(post_hook_inputs[0]["tool_input"]["command"], command);
+    assert_eq!(
+        post_hook_inputs[0]["cwd"],
+        serde_json::json!(command_cwd.path())
+    );
     assert!(
         post_hook_inputs[0]["tool_response"]
             .as_str()

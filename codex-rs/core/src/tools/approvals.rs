@@ -1,6 +1,7 @@
 //! Central approval policy-stage execution and reviewer routing.
 
 use crate::command_canonicalization::canonicalize_command_for_approval;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::prompt_is_rejected_by_policy;
 use crate::guardian::GuardianNetworkAccessTrigger;
 use crate::guardian::GuardianReviewContext;
@@ -164,13 +165,27 @@ pub(crate) enum ApprovalCacheKey {
 }
 
 impl ApprovalAction {
-    pub(crate) fn permission_request_payload(&self) -> PermissionRequestPayload {
+    pub(crate) fn permission_request_payload(
+        &self,
+        environments: &TurnEnvironmentSnapshot,
+    ) -> PermissionRequestPayload {
+        let environments = environments.refresh_readiness();
+        let host_cwd = |environment_id: &str, cwd: &PathUri| {
+            environments
+                .turn_environments()
+                .find(|environment| environment.selection.environment_id == environment_id)
+                .filter(|environment| !environment.environment.is_remote())
+                .and_then(|_| cwd.to_abs_path().ok())
+        };
         match self {
             Self::ExecCommand {
+                environment_id,
                 hook_command,
                 justification,
+                cwd,
                 ..
-            } => PermissionRequestPayload::bash(hook_command.clone(), justification.clone()),
+            } => PermissionRequestPayload::bash(hook_command.clone(), justification.clone())
+                .with_cwd(host_cwd(environment_id, cwd)),
             Self::WriteStdin {
                 id,
                 approval_id,
@@ -194,15 +209,18 @@ impl ApprovalAction {
                     "sandbox_permissions": sandbox_permissions,
                     "additional_permissions": additional_permissions,
                 }),
+                cwd: host_cwd(environment_id, cwd),
             },
             #[cfg(unix)]
-            Self::Execve { command, .. } => PermissionRequestPayload::bash(
+            Self::Execve { command, cwd, .. } => PermissionRequestPayload::bash(
                 codex_shell_command::parse_command::shlex_join(command),
                 /*description*/ None,
-            ),
+            )
+            .with_cwd(Some(cwd.clone())),
             Self::ApplyPatch { patch, .. } => PermissionRequestPayload {
                 tool_name: HookToolName::apply_patch(),
                 tool_input: serde_json::json!({ "command": patch }),
+                cwd: None,
             },
             Self::McpToolCall {
                 hook_tool_name,
@@ -213,15 +231,18 @@ impl ApprovalAction {
                 tool_input: arguments
                     .clone()
                     .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
+                cwd: None,
             },
             Self::NetworkAccess {
                 hook_command,
                 target,
+                cwd,
                 ..
             } => PermissionRequestPayload::bash(
                 hook_command.clone(),
                 Some(format!("network-access {target}")),
-            ),
+            )
+            .with_cwd(Some(cwd.clone())),
             Self::RequestPermissions {
                 reason,
                 permissions,
@@ -232,6 +253,7 @@ impl ApprovalAction {
                     "reason": reason,
                     "permissions": permissions,
                 }),
+                cwd: None,
             },
         }
     }
@@ -509,7 +531,7 @@ impl Session {
             self,
             &ctx.review_context,
             &permission_request_run_id,
-            action.permission_request_payload(),
+            action.permission_request_payload(ctx.review_context.environments()),
         )
         .await
         {

@@ -129,8 +129,13 @@ async fn permission_request_payload_uses_apply_patch_hook_name_and_aliases() {
         permissions_preapproved: false,
     };
 
-    let payload =
-        ApplyPatchRuntime::build_approval_action(&req, "call-1").permission_request_payload();
+    let environments = crate::environment_selection::TurnEnvironmentSnapshot {
+        environments: vec![crate::environment_selection::TurnEnvironmentState::Ready(
+            req.turn_environment.clone(),
+        )],
+    };
+    let payload = ApplyPatchRuntime::build_approval_action(&req, "call-1")
+        .permission_request_payload(&environments);
 
     assert_eq!(payload.tool_name.name(), "apply_patch");
     assert_eq!(

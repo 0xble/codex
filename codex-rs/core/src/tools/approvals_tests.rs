@@ -4,6 +4,31 @@ use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use pretty_assertions::assert_eq;
 
+#[tokio::test]
+async fn apply_patch_permission_request_preserves_turn_cwd_fallback() {
+    let (_, turn, _) = make_session_and_context_with_rx().await;
+    let review_context = GuardianReviewContext::from(&turn);
+    let patch = "*** Begin Patch\n*** End Patch".to_string();
+    let action = ApprovalAction::ApplyPatch {
+        id: "patch-cwd-fallback".to_string(),
+        environment_id: "another-environment".to_string(),
+        cwd: PathUri::parse("file:///another-workspace").expect("valid cwd"),
+        files: Vec::new(),
+        patch: patch.clone(),
+        changes: Arc::new(HashMap::new()),
+        permissions_preapproved: false,
+    };
+
+    assert_eq!(
+        action.permission_request_payload(review_context.environments()),
+        PermissionRequestPayload {
+            tool_name: HookToolName::apply_patch(),
+            tool_input: serde_json::json!({ "command": patch }),
+            cwd: None,
+        },
+    );
+}
+
 #[test]
 fn approval_resolution_rejects_denied_network_policy_amendment() {
     let resolution = ApprovalResolution {

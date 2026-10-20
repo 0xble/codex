@@ -15,6 +15,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_tools::LoadableToolSpec;
 use codex_tools::ToolName;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_audio::estimate_audio_token_count;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
@@ -391,6 +392,8 @@ pub struct ExecCommandToolOutput {
     /// Bytes omitted by the output collection cap before model-facing truncation.
     pub output_omitted_bytes: Option<NonZeroUsize>,
     pub hook_command: Option<String>,
+    /// Resolved cwd retained across exec and subsequent write_stdin calls.
+    pub hook_cwd: Option<AbsolutePathBuf>,
 }
 
 impl ToolOutput for ExecCommandToolOutput {
@@ -433,6 +436,10 @@ impl ToolOutput for ExecCommandToolOutput {
         self.hook_command
             .as_ref()
             .map(|command| serde_json::json!({ "command": command }))
+    }
+
+    fn post_tool_use_cwd(&self) -> Option<AbsolutePathBuf> {
+        self.hook_cwd.clone()
     }
 
     fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {

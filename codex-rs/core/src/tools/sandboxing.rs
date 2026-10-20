@@ -29,6 +29,7 @@ use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_tools::ToolName;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use futures::Future;
@@ -128,6 +129,10 @@ pub(crate) use super::approvals::ApprovalAction;
 pub(crate) struct PermissionRequestPayload {
     pub tool_name: HookToolName,
     pub tool_input: serde_json::Value,
+    /// Host-local cwd for the action being approved, when the executor supplied
+    /// a native path. Hook stdin must describe the command's cwd, not only the
+    /// enclosing turn cwd.
+    pub cwd: Option<AbsolutePathBuf>,
 }
 
 impl PermissionRequestPayload {
@@ -144,7 +149,13 @@ impl PermissionRequestPayload {
         Self {
             tool_name: HookToolName::bash(),
             tool_input: serde_json::Value::Object(tool_input),
+            cwd: None,
         }
+    }
+
+    pub(crate) fn with_cwd(mut self, cwd: Option<AbsolutePathBuf>) -> Self {
+        self.cwd = cwd;
+        self
     }
 }
 

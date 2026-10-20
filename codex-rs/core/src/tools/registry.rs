@@ -39,6 +39,7 @@ use codex_rollout::state_db;
 use codex_shell_command::parse_command::parse_shell_script;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use indexmap::IndexMap;
 use indexmap::map::Entry;
@@ -134,6 +135,7 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
 
                     serde_json::to_value(body).ok()
                 })?,
+            cwd: None,
         })
     }
 
@@ -143,6 +145,7 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         };
 
         Some(PreToolUsePayload {
+            cwd: None,
             tool_name: function_hook_tool_name(invocation),
             tool_input: function_hook_tool_input(arguments),
         })
@@ -264,6 +267,8 @@ impl ToolOutput for PostToolUseFeedbackOutput {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreToolUsePayload {
+    /// Host-local command cwd. Other tools use the enclosing environment cwd.
+    pub(crate) cwd: Option<AbsolutePathBuf>,
     /// Hook-facing tool name model.
     ///
     /// The canonical name is serialized to hook stdin, while aliases are used
@@ -289,6 +294,9 @@ pub(crate) struct PostToolUsePayload {
     pub(crate) tool_input: Value,
     /// Tool result exposed at `tool_response`.
     pub(crate) tool_response: Value,
+    /// Host-local cwd for the command, when the tool supplied one that can be
+    /// represented on this host. Other tools use the enclosing turn cwd.
+    pub(crate) cwd: Option<AbsolutePathBuf>,
 }
 
 /// A tool runtime together with its effective exposure for the current step.
@@ -610,6 +618,7 @@ impl ToolRegistry {
             match run_pre_tool_use_hooks(
                 &invocation.session,
                 invocation.step_context.as_ref(),
+                pre_tool_use_payload.cwd,
                 invocation.call_id.clone(),
                 &pre_tool_use_payload.tool_name,
                 &pre_tool_use_payload.tool_input,
@@ -726,11 +735,7 @@ impl ToolRegistry {
                 run_post_tool_use_hooks(
                     &invocation.session,
                     invocation.step_context.as_ref(),
-                    post_tool_use_payload.tool_use_id,
-                    post_tool_use_payload.tool_name.name().to_string(),
-                    post_tool_use_payload.tool_name.matcher_aliases().to_vec(),
-                    post_tool_use_payload.tool_input,
-                    post_tool_use_payload.tool_response,
+                    post_tool_use_payload,
                 )
                 .await,
             )
