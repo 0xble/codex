@@ -190,15 +190,7 @@ impl ExecCommandHandler {
             "unified exec is unavailable in this session",
         )?;
         let native_environment_cwd = turn_environment.cwd().clone();
-        let cwd = environment_args
-            .workdir
-            .as_deref()
-            .filter(|workdir| !workdir.is_empty())
-            .map_or_else(
-                || Ok(native_environment_cwd.clone()),
-                |workdir| native_environment_cwd.join(workdir),
-            )
-            .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
+        let cwd = environment_args.resolve_cwd(&native_environment_cwd)?;
         let environment = Arc::clone(&turn_environment.environment);
         let fs = environment.get_filesystem();
 
@@ -395,9 +387,13 @@ impl ExecCommandHandler {
                 original_token_count: None,
                 output_omitted_bytes: None,
                 hook_command: None,
+                hook_cwd: None,
             }));
         }
 
+        let hook_cwd = (!environment.is_remote())
+            .then(|| cwd.to_abs_path().ok())
+            .flatten();
         emit_unified_exec_tty_metric(&step_context.session_telemetry, tty);
         crate::tools::lifecycle::notify_command_start(
             context.session.as_ref(),
@@ -462,6 +458,7 @@ impl ExecCommandHandler {
                     original_token_count: Some(original_token_count),
                     output_omitted_bytes,
                     hook_command: Some(hook_command),
+                    hook_cwd,
                 }))
             }
             Err(err) => {
@@ -516,12 +513,30 @@ impl CoreToolRuntime for ExecCommandHandler {
             return None;
         };
 
-        parse_arguments::<ExecCommandArgs>(arguments)
+        let args: ExecCommandArgs = parse_arguments(arguments).ok()?;
+        let cwd = parse_arguments::<ExecCommandEnvironmentArgs>(arguments)
             .ok()
-            .map(|args| PreToolUsePayload {
-                tool_name: HookToolName::bash(),
-                tool_input: serde_json::json!({ "command": args.cmd }),
-            })
+            .and_then(|environment_args| {
+                let environment = resolve_tool_environment(
+                    &invocation.step_context,
+                    environment_args.environment_id.as_deref(),
+                    "unified exec is unavailable in this session",
+                )
+                .ok()?;
+                if environment.environment.is_remote() {
+                    return None;
+                }
+                environment_args
+                    .resolve_cwd(environment.cwd())
+                    .ok()?
+                    .to_abs_path()
+                    .ok()
+            });
+        Some(PreToolUsePayload {
+            cwd,
+            tool_name: HookToolName::bash(),
+            tool_input: serde_json::json!({ "command": args.cmd }),
+        })
     }
 
     fn with_updated_hook_input(

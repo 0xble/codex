@@ -463,6 +463,7 @@ async fn function_tools_expose_default_hook_payloads_and_rewrites() -> anyhow::R
     assert_eq!(
         handler.pre_tool_use_payload(&invocation),
         Some(PreToolUsePayload {
+            cwd: None,
             tool_name: HookToolName::new("functions.echo"),
             tool_input: serde_json::json!({ "message": "hello" }),
         })
@@ -472,6 +473,7 @@ async fn function_tools_expose_default_hook_payloads_and_rewrites() -> anyhow::R
         Some(PostToolUsePayload {
             tool_name: HookToolName::new("functions.echo"),
             tool_use_id: "call-1".to_string(),
+            cwd: None,
             tool_input: serde_json::json!({ "message": "hello" }),
             tool_response: serde_json::json!("echoed"),
         })
@@ -507,6 +509,7 @@ async fn function_hook_input_defaults_empty_arguments_to_object() {
     assert_eq!(
         handler.pre_tool_use_payload(&invocation),
         Some(PreToolUsePayload {
+            cwd: None,
             tool_name: HookToolName::new("echo"),
             tool_input: serde_json::json!({}),
         })
@@ -543,14 +546,17 @@ async fn spawn_agent_function_tools_use_agent_matcher_alias() {
         hook_payloads,
         vec![
             Some(PreToolUsePayload {
+                cwd: None,
                 tool_name: HookToolName::spawn_agent(),
                 tool_input: serde_json::json!({ "message": "inspect this repo" }),
             }),
             Some(PreToolUsePayload {
+                cwd: None,
                 tool_name: HookToolName::spawn_agent(),
                 tool_input: serde_json::json!({ "message": "inspect this repo" }),
             }),
             Some(PreToolUsePayload {
+                cwd: None,
                 tool_name: HookToolName::spawn_agent(),
                 tool_input: serde_json::json!({ "message": "inspect this repo" }),
             }),

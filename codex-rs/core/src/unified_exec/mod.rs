@@ -195,6 +195,8 @@ struct ProcessEntry {
     process_id: i32,
     cwd: PathUri,
     initial_exec_command_active: Arc<std::sync::atomic::AtomicBool>,
+    /// Host-local hook cwd captured from the original execution environment.
+    hook_cwd: Option<codex_utils_absolute_path::AbsolutePathBuf>,
     hook_command: String,
     tty: bool,
     environment_id: String,

@@ -137,6 +137,7 @@ async fn exec_command_with_tty(
     let process_started_alive = !process.has_exited() && process.exit_code().is_none();
     if process_started_alive {
         let entry = ProcessEntry {
+            hook_cwd: None,
             process: Arc::clone(&process),
             plugin_metrics_sidecar: None,
             call_id: context.call_id.clone(),
@@ -215,6 +216,7 @@ async fn exec_command_with_tty(
         original_token_count: Some(original_token_count),
         output_omitted_bytes,
         hook_command: Some(cmd.to_string()),
+        hook_cwd: None,
     })
 }
 
@@ -613,6 +615,7 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
     manager.process_store.lock().await.processes.insert(
         process_id,
         ProcessEntry {
+            hook_cwd: None,
             process,
             plugin_metrics_sidecar: None,
             call_id: "call".to_string(),
@@ -699,6 +702,7 @@ async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Resu
     manager.process_store.lock().await.processes.insert(
         process_id,
         ProcessEntry {
+            hook_cwd: None,
             process: Arc::clone(&process),
             plugin_metrics_sidecar: None,
             call_id: "call".to_string(),

@@ -400,6 +400,7 @@ mod tests {
         assert_eq!(
             CoreToolRuntime::pre_tool_use_payload(&handler, &invocation),
             Some(PreToolUsePayload {
+                cwd: None,
                 tool_name: HookToolName::new("extension_echo"),
                 tool_input: json!({ "message": "hello" }),
             })
@@ -409,6 +410,7 @@ mod tests {
             Some(PostToolUsePayload {
                 tool_name: HookToolName::new("extension_echo"),
                 tool_use_id: "call-extension".to_string(),
+                cwd: None,
                 tool_input: json!({ "message": "hello" }),
                 tool_response: json!({ "ok": true }),
             })

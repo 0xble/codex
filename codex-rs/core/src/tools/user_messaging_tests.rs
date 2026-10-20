@@ -51,6 +51,7 @@ fn messaging_result(name: &str, input: Value, success: bool) -> AnyToolResult {
             tool_use_id: "message-call".to_owned(),
             tool_input: input,
             tool_response: json!({}),
+            cwd: None,
         }),
     }
 }

@@ -263,6 +263,7 @@ struct PreparedProcessHandles {
     network_approval: Option<DeferredNetworkApproval>,
     call_id: String,
     hook_command: String,
+    hook_cwd: Option<codex_utils_absolute_path::AbsolutePathBuf>,
     process_id: i32,
     tty: bool,
 }
@@ -525,6 +526,9 @@ impl UnifiedExecProcessManager {
         mut completion: Option<&mut Completion<'_>>,
     ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
         let cwd = request.cwd.clone();
+        let hook_cwd = (!request.turn_environment.environment.is_remote())
+            .then(|| cwd.to_abs_path().ok())
+            .flatten();
         let process = self
             .open_session_with_sandbox(&request, cwd.clone(), context)
             .await;
@@ -604,6 +608,7 @@ impl UnifiedExecProcessManager {
                 &request.command,
                 request.hook_command.clone(),
                 cwd.clone(),
+                hook_cwd.clone(),
                 request.turn_environment.selection.environment_id.clone(),
                 permissions,
                 plugin_attribution.clone(),
@@ -840,6 +845,7 @@ impl UnifiedExecProcessManager {
             original_token_count: Some(original_token_count),
             output_omitted_bytes,
             hook_command: Some(request.hook_command.clone()),
+            hook_cwd,
         };
 
         Ok(response)
@@ -972,6 +978,7 @@ impl UnifiedExecProcessManager {
             network_approval,
             call_id,
             hook_command,
+            hook_cwd,
             process_id,
             tty,
             ..
@@ -1103,6 +1110,7 @@ impl UnifiedExecProcessManager {
             original_token_count: Some(original_token_count),
             output_omitted_bytes,
             hook_command: Some(hook_command),
+            hook_cwd,
         };
 
         let should_emit_interaction = !request.input.is_empty() || response.process_id.is_some();
@@ -1180,6 +1188,7 @@ impl UnifiedExecProcessManager {
             network_approval: entry.network_approval.clone(),
             call_id: entry.call_id.clone(),
             hook_command: entry.hook_command.clone(),
+            hook_cwd: entry.hook_cwd.clone(),
             process_id: entry.process_id,
             tty: entry.tty,
         })
@@ -1193,6 +1202,7 @@ impl UnifiedExecProcessManager {
         command: &[String],
         hook_command: String,
         cwd: PathUri,
+        hook_cwd: Option<codex_utils_absolute_path::AbsolutePathBuf>,
         environment_id: String,
         permissions: super::TerminalPermissions,
         plugin_attribution: Option<PluginCommandAttribution>,
@@ -1214,6 +1224,7 @@ impl UnifiedExecProcessManager {
             process_id,
             cwd: cwd.clone(),
             initial_exec_command_active,
+            hook_cwd,
             hook_command,
             tty,
             environment_id,

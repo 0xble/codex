@@ -512,27 +512,33 @@ async fn exec_command_reuses_foreign_windows_grant() {
         granted_permissions.clone(),
         /*strict_auto_review*/ false,
     );
-    let response = ExecCommandHandler::default()
-        .handle(ToolInvocation {
-            session: Arc::clone(&session),
-            step_context,
-            turn,
-            cancellation_token: tokio_util::sync::CancellationToken::new(),
-            tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
-            call_id: "foreign-windows-grant".to_string(),
-            tool_name: codex_tools::ToolName::plain("exec_command"),
-            source: ToolCallSource::Direct,
-            payload: ToolPayload::Function {
-                arguments: serde_json::json!({
-                    "cmd": "*** Begin Patch\n*** Add File: granted/file.txt\n+text\n*** End Patch",
-                    "workdir": "nested",
-                    "sandbox_permissions": "with_additional_permissions",
-                    "additional_permissions": granted_permissions,
-                })
-                .to_string(),
-            },
-        })
-        .await;
+    let invocation = ToolInvocation {
+        session: Arc::clone(&session),
+        step_context,
+        turn,
+        cancellation_token: tokio_util::sync::CancellationToken::new(),
+        tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+        call_id: "foreign-windows-grant".to_string(),
+        tool_name: codex_tools::ToolName::plain("exec_command"),
+        source: ToolCallSource::Direct,
+        payload: ToolPayload::Function {
+            arguments: serde_json::json!({
+                "cmd": "*** Begin Patch\n*** Add File: granted/file.txt\n+text\n*** End Patch",
+                "workdir": "nested",
+                "sandbox_permissions": "with_additional_permissions",
+                "additional_permissions": granted_permissions,
+            })
+            .to_string(),
+        },
+    };
+    let handler = ExecCommandHandler::default();
+    assert_eq!(
+        handler
+            .pre_tool_use_payload(&invocation)
+            .map(|payload| payload.cwd),
+        Some(None),
+    );
+    let response = handler.handle(invocation).await;
 
     let Err(FunctionCallError::RespondToModel(message)) = response else {
         panic!("raw patch should stop before remote execution");
@@ -545,8 +551,11 @@ async fn exec_command_reuses_foreign_windows_grant() {
 
 #[tokio::test]
 async fn exec_command_pre_tool_use_payload_uses_raw_command() {
+    let command_cwd = tempfile::tempdir().expect("command cwd");
     let payload = ToolPayload::Function {
-        arguments: serde_json::json!({ "cmd": "printf exec command" }).to_string(),
+        arguments:
+            serde_json::json!({ "cmd": "printf exec command", "workdir": command_cwd.path() })
+                .to_string(),
     };
     let (session, turn) = make_session_and_context().await;
     let turn = Arc::new(turn);
@@ -565,10 +574,48 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
             payload,
         }),
         Some(crate::tools::registry::PreToolUsePayload {
+            cwd: Some(
+                AbsolutePathBuf::from_absolute_path(command_cwd.path()).expect("absolute cwd")
+            ),
             tool_name: HookToolName::bash(),
             tool_input: serde_json::json!({ "command": "printf exec command" }),
         })
     );
+}
+
+#[tokio::test]
+async fn exec_command_pre_tool_use_payload_keeps_gate_when_environment_is_unavailable() {
+    for arguments in [
+        serde_json::json!({ "cmd": "printf exec command", "environment_id": "missing-environment" }),
+        serde_json::json!({ "cmd": "printf exec command", "environment_id": 42 }),
+        serde_json::json!({ "cmd": "printf exec command", "workdir": 42 }),
+    ] {
+        let payload = ToolPayload::Function {
+            arguments: arguments.to_string(),
+        };
+        let (session, turn) = make_session_and_context().await;
+        let turn = Arc::new(turn);
+        let handler = ExecCommandHandler::default();
+
+        assert_eq!(
+            handler.pre_tool_use_payload(&ToolInvocation {
+                session: session.into(),
+                step_context: StepContext::for_test(Arc::clone(&turn)),
+                turn,
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
+                tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+                call_id: "call-unavailable-environment".to_string(),
+                tool_name: codex_tools::ToolName::plain("exec_command"),
+                source: crate::tools::context::ToolCallSource::Direct,
+                payload,
+            }),
+            Some(crate::tools::registry::PreToolUsePayload {
+                cwd: None,
+                tool_name: HookToolName::bash(),
+                tool_input: serde_json::json!({ "command": "printf exec command" }),
+            }),
+        );
+    }
 }
 
 #[tokio::test]
@@ -613,6 +660,7 @@ async fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_s
         original_token_count: None,
         output_omitted_bytes: None,
         hook_command: Some("echo three".to_string()),
+        hook_cwd: None,
     };
     let invocation = invocation_for_payload("exec_command", "call-43", payload).await;
     let handler = ExecCommandHandler::default();
@@ -623,6 +671,7 @@ async fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_s
             tool_use_id: "call-43".to_string(),
             tool_input: serde_json::json!({ "command": "echo three" }),
             tool_response: serde_json::json!("three"),
+            cwd: None,
         })
     );
 }
@@ -644,6 +693,7 @@ async fn exec_command_post_tool_use_payload_uses_output_for_interactive_completi
         original_token_count: None,
         output_omitted_bytes: None,
         hook_command: Some("echo three".to_string()),
+        hook_cwd: None,
     };
     let invocation = invocation_for_payload("exec_command", "call-44", payload).await;
     let handler = ExecCommandHandler::default();
@@ -655,6 +705,7 @@ async fn exec_command_post_tool_use_payload_uses_output_for_interactive_completi
             tool_use_id: "call-44".to_string(),
             tool_input: serde_json::json!({ "command": "echo three" }),
             tool_response: serde_json::json!("three"),
+            cwd: None,
         })
     );
 }
@@ -676,6 +727,7 @@ async fn exec_command_post_tool_use_payload_skips_running_sessions() {
         original_token_count: None,
         output_omitted_bytes: None,
         hook_command: Some("echo three".to_string()),
+        hook_cwd: None,
     };
     let invocation = invocation_for_payload("exec_command", "call-45", payload).await;
     let handler = ExecCommandHandler::default();
@@ -703,8 +755,22 @@ async fn write_stdin_post_tool_use_payload_uses_original_exec_call_id_and_comman
         original_token_count: None,
         output_omitted_bytes: None,
         hook_command: Some("sleep 1; echo finished".to_string()),
+        hook_cwd: None,
     };
     let invocation = invocation_for_payload("write_stdin", "write-stdin-call", payload).await;
+    let expected_cwd = invocation
+        .step_context
+        .environments
+        .primary()
+        .unwrap()
+        .cwd()
+        .to_abs_path()
+        .unwrap()
+        .join("original-command");
+    let output = ExecCommandToolOutput {
+        hook_cwd: Some(expected_cwd.clone()),
+        ..output
+    };
     let handler = WriteStdinHandler;
 
     assert_eq!(
@@ -714,6 +780,7 @@ async fn write_stdin_post_tool_use_payload_uses_original_exec_call_id_and_comman
             tool_use_id: "exec-call-45".to_string(),
             tool_input: serde_json::json!({ "command": "sleep 1; echo finished" }),
             tool_response: serde_json::json!("finished\n"),
+            cwd: Some(expected_cwd),
         })
     );
 }
@@ -735,6 +802,7 @@ async fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separ
         original_token_count: None,
         output_omitted_bytes: None,
         hook_command: Some("sleep 2; echo alpha".to_string()),
+        hook_cwd: None,
     };
     let output_b = ExecCommandToolOutput {
         event_call_id: "exec-call-b".to_string(),
@@ -748,6 +816,7 @@ async fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separ
         original_token_count: None,
         output_omitted_bytes: None,
         hook_command: Some("sleep 1; echo beta".to_string()),
+        hook_cwd: None,
     };
     let invocation_b = invocation_for_payload("write_stdin", "write-call-b", payload.clone()).await;
     let invocation_a = invocation_for_payload("write_stdin", "write-call-a", payload).await;
@@ -766,12 +835,14 @@ async fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separ
                 tool_use_id: "exec-call-b".to_string(),
                 tool_input: serde_json::json!({ "command": "sleep 1; echo beta" }),
                 tool_response: serde_json::json!("beta\n"),
+                cwd: None,
             }),
             Some(crate::tools::registry::PostToolUsePayload {
                 tool_name: HookToolName::bash(),
                 tool_use_id: "exec-call-a".to_string(),
                 tool_input: serde_json::json!({ "command": "sleep 2; echo alpha" }),
                 tool_response: serde_json::json!("alpha\n"),
+                cwd: None,
             }),
         ]
     );

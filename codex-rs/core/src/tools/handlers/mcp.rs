@@ -452,6 +452,7 @@ impl CoreToolRuntime for McpHandler {
         };
 
         Some(PreToolUsePayload {
+            cwd: None,
             tool_name: self.hook_tool_name(),
             tool_input: mcp_hook_tool_input(arguments),
         })
@@ -495,6 +496,7 @@ impl CoreToolRuntime for McpHandler {
             tool_use_id: invocation.call_id.clone(),
             tool_input: result.post_tool_use_input(&invocation.payload)?,
             tool_response,
+            cwd: None,
         })
     }
 }
@@ -638,6 +640,7 @@ mod tests {
                 payload,
             }),
             Some(PreToolUsePayload {
+                cwd: None,
                 tool_name: HookToolName::new("mcp__memory__create_entities"),
                 tool_input: json!({
                     "entities": [{
@@ -672,6 +675,7 @@ mod tests {
                 payload,
             }),
             Some(PreToolUsePayload {
+                cwd: None,
                 tool_name: HookToolName::new("mcp__foo__exec_command"),
                 tool_input: json!({ "message": "hello" }),
             })
@@ -767,6 +771,7 @@ mod tests {
             Some(PostToolUsePayload {
                 tool_name: HookToolName::new("mcp__filesystem__read_file"),
                 tool_use_id: "call-mcp-post".to_string(),
+                cwd: None,
                 tool_input: json!({
                     "path": {
                         "file_id": "file_123"

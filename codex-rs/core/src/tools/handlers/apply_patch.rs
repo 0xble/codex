@@ -394,6 +394,7 @@ impl CoreToolRuntime for ApplyPatchHandler {
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
         apply_patch_payload_command(&invocation.payload).map(|command| PreToolUsePayload {
+            cwd: None,
             tool_name: HookToolName::apply_patch(),
             tool_input: serde_json::json!({ "command": command }),
         })
@@ -428,6 +429,7 @@ impl CoreToolRuntime for ApplyPatchHandler {
                 "command": apply_patch_payload_command(&invocation.payload)?,
             }),
             tool_response,
+            cwd: None,
         })
     }
 }

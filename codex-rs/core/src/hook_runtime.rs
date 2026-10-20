@@ -71,6 +71,7 @@ use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::state::TurnState;
 use crate::tools::hook_names::HookToolName;
+use crate::tools::registry::PostToolUsePayload;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::turn_metadata::ExecutionMetadata;
 
@@ -189,6 +190,7 @@ pub(crate) async fn run_pending_session_start_hooks(
 pub(crate) async fn run_pre_tool_use_hooks(
     sess: &Arc<Session>,
     step_context: &StepContext,
+    cwd: Option<AbsolutePathBuf>,
     tool_use_id: String,
     tool_name: &HookToolName,
     tool_input: &Value,
@@ -198,7 +200,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
         subagent: thread_spawn_subagent_hook_context(sess, turn_context),
-        cwd: tool_hook_cwd(&step_context.environments, turn_context),
+        cwd: cwd.unwrap_or_else(|| tool_hook_cwd(&step_context.environments, turn_context)),
         transcript_path: sess.hook_transcript_path().await,
         model: step_context.settings.model_info.slug.clone(),
         permission_mode: hook_permission_mode(step_context.settings.approval_policy()),
@@ -267,7 +269,13 @@ pub(crate) async fn run_permission_request_hooks(
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
         subagent: thread_spawn_subagent_hook_context(sess, turn_context),
-        cwd: tool_hook_cwd(review_context.environments(), turn_context).to_path_buf(),
+        cwd: payload
+            .cwd
+            .clone()
+            .map(|cwd| cwd.to_path_buf())
+            .unwrap_or_else(|| {
+                tool_hook_cwd(review_context.environments(), turn_context).to_path_buf()
+            }),
         transcript_path: sess.hook_transcript_path().await,
         model: review_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(review_context.approval_policy),
@@ -298,26 +306,24 @@ pub(crate) async fn run_permission_request_hooks(
 pub(crate) async fn run_post_tool_use_hooks(
     sess: &Arc<Session>,
     step_context: &StepContext,
-    tool_use_id: String,
-    tool_name: String,
-    matcher_aliases: Vec<String>,
-    tool_input: Value,
-    tool_response: Value,
+    payload: PostToolUsePayload,
 ) -> PostToolUseOutcome {
     let turn_context = &step_context.turn;
     let request = PostToolUseRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
         subagent: thread_spawn_subagent_hook_context(sess, turn_context),
-        cwd: tool_hook_cwd(&step_context.environments, turn_context),
+        cwd: payload
+            .cwd
+            .unwrap_or_else(|| tool_hook_cwd(&step_context.environments, turn_context)),
         transcript_path: sess.hook_transcript_path().await,
         model: step_context.settings.model_info.slug.clone(),
         permission_mode: hook_permission_mode(step_context.settings.approval_policy()),
-        tool_name,
-        matcher_aliases,
-        tool_use_id,
-        tool_input,
-        tool_response,
+        tool_name: payload.tool_name.name().to_string(),
+        matcher_aliases: payload.tool_name.matcher_aliases().to_vec(),
+        tool_use_id: payload.tool_use_id,
+        tool_input: payload.tool_input,
+        tool_response: payload.tool_response,
     };
     let hooks = sess.hooks();
     let preview_runs = hooks.preview_post_tool_use(&request);
